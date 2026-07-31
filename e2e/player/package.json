@@ -1,0 +1,19 @@
+{
+  "name": "worldmanagement-player-e2e",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Optional Mineflayer black-box tests for WorldManagement",
+  "scripts": {
+    "test": "node --test test/command-tree.test.cjs test/protocol-strategy.test.cjs",
+    "test:e2e": "node test/player-smoke.cjs"
+  },
+  "engines": {
+    "node": ">=22"
+  },
+  "dependencies": {
+    "minecraft-data": "3.111.0",
+    "minecraft-protocol": "1.66.2",
+    "mineflayer": "4.37.1",
+    "yaml": "2.8.1"
+  }
+}

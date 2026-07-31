@@ -1,0 +1,45 @@
+# Runtime level followed by the canonical Brigadier executable path.
+CONSOLE_RUNTIME wm create <world>
+CONSOLE_RUNTIME wm create <world> <environment>
+CONSOLE_RUNTIME wm create <world> <environment> <world-type>
+CONSOLE_RUNTIME wm create <world> <environment> <world-type> <seed>
+CONSOLE_RUNTIME wm adopt <world>
+CONSOLE_RUNTIME wm load <world>
+CONSOLE_RUNTIME wm unload <world>
+PLAYER_RUNTIME wm unload <world> <fallback>
+CONSOLE_RUNTIME wm remove <world>
+CONSOLE_RUNTIME wm remove <world> purge confirm
+CONSOLE_RUNTIME wm manage <world>
+CONSOLE_RUNTIME wm import <world> <environment>
+CONSOLE_RUNTIME wm delete <world> confirm
+PLAYER_RUNTIME wm delete <world> <fallback> confirm
+CONSOLE_RUNTIME wm identity show <world>
+CONSOLE_RUNTIME wm identity sync <world>
+CONSOLE_RUNTIME wm identity accept-replacement <world> confirm clear-warps
+CONSOLE_RUNTIME wm identity accept-replacement <world> confirm keep-warps
+CONSOLE_RUNTIME wm identity abandon <world> confirm
+CONSOLE_RUNTIME wm display-name set <world> <display-name...>
+CONSOLE_RUNTIME wm display-name reset <world>
+PLAYER_RUNTIME wm tp self <world>
+PLAYER_RUNTIME wm tp self <world> <x> <y> <z>
+PLAYER_RUNTIME wm tp player <player> <world>
+PLAYER_RUNTIME wm tp player <player> <world> <x> <y> <z>
+PLAYER_RUNTIME wm tp --any <world>
+PLAYER_RUNTIME wm tp --any <world> <x> <y> <z>
+CONSOLE_RUNTIME wm warp list <world>
+PLAYER_RUNTIME wm warp set <world> <name> <visibility>
+CONSOLE_RUNTIME wm warp delete <world> <name>
+PLAYER_RUNTIME wm warp tp <world> <name>
+PLAYER_RUNTIME wm warp trust <world> <warp> <operation> <player>
+PLAYER_RUNTIME wm ownership owner set <world> <player>
+CONSOLE_RUNTIME wm ownership owner remove <world>
+CONSOLE_RUNTIME wm ownership rank create <world> <rank>
+CONSOLE_RUNTIME wm ownership rank delete <world> <rank>
+PLAYER_RUNTIME wm ownership rank set <world> <player> <rank>
+PLAYER_RUNTIME wm ownership rank remove <world> <player>
+CONSOLE_RUNTIME wm ownership rank perm <world> <rank> <operation> <permission>
+CONSOLE_RUNTIME wm ownership rank toggle <world>
+PLAYER_RUNTIME wm ownership access <world> <operation> <value>
+CONSOLE_RUNTIME wm storage migrate <source> <target> confirm
+CONSOLE_RUNTIME wm list
+CONSOLE_RUNTIME wm list detached

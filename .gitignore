@@ -1,0 +1,7 @@
+.gradle/
+build/
+bin/
+out/
+*.iml
+plan/
+e2e/player/node_modules/

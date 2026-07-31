@@ -1,0 +1,12 @@
+name: WorldManagementE2ESupport
+version: ${version}
+main: io.github.bearl.worldmanagement.e2esupport.WorldManagementE2ESupportPlugin
+api-version: '${apiVersion}'
+description: Isolated test-only fixtures for WorldManagement Paper E2E tests.
+default-permission: false
+dependencies:
+	server:
+		LuckPerms:
+			load: BEFORE
+			required: false
+			join-classpath: true

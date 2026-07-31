@@ -1,0 +1,90 @@
+name: WorldManagement
+version: ${version}
+main: io.github.bearl.worldmanagement.WorldManagementPlugin
+bootstrapper: io.github.bearl.worldmanagement.WorldManagementBootstrap
+api-version: '${apiVersion}'
+description: Safe world lifecycle, ownership, and Warp management for Paper.
+author: BearL
+default-permission: false
+dependencies:
+  server:
+    LuckPerms:
+      load: BEFORE
+      required: false
+      join-classpath: true
+permissions:
+  worldmanagement.command.adopt:
+    description: Register an already loaded world with WorldManagement.
+    default: op
+  worldmanagement.command.list:
+    description: List worlds managed by WorldManagement.
+    default: op
+  worldmanagement.command.create:
+    description: Create and register a new world.
+    default: op
+  worldmanagement.command.load:
+    description: Load a registered world.
+    default: op
+  worldmanagement.command.unload:
+    description: Unload a registered world.
+    default: op
+  worldmanagement.command.remove:
+    description: Detach an unloaded world without deleting its files.
+    default: op
+  worldmanagement.command.manage:
+    description: Reattach detached world metadata to management.
+    default: op
+  worldmanagement.command.import:
+    description: Import and register an existing world directory.
+    default: op
+  worldmanagement.command.delete:
+    description: Unload and permanently delete a registered empty world.
+    default: op
+  worldmanagement.command.identity.show:
+    description: Show persisted and observed world identity state.
+    default: op
+  worldmanagement.command.identity.sync:
+    description: Synchronize observed drift for a loaded world.
+    default: op
+  worldmanagement.command.identity.accept-replacement:
+    description: Accept a verified pending world replacement.
+    default: op
+  worldmanagement.command.identity.abandon:
+    description: Detach non-verified metadata without changing the runtime world or files.
+    default: op
+  worldmanagement.command.display-name.set:
+    description: Set a managed world's validated MiniMessage display name.
+    default: op
+  worldmanagement.command.display-name.reset:
+    description: Reset a managed world's display name to its world ID.
+    default: op
+  worldmanagement.command.warp:
+    description: Manage and use world warps.
+    default: true
+  worldmanagement.command.trust:
+    description: Manage private warp trust by player UUID.
+    default: op
+  worldmanagement.command.owner:
+    description: Set or remove a world owner by online player name or UUID.
+    default: op
+  worldmanagement.command.rank:
+    description: Manage ranks and player rank assignments by online player name or UUID.
+    default: op
+  worldmanagement.command.access:
+    description: Manage world whitelist and blacklist entries by online player name or UUID.
+    default: op
+  worldmanagement.command.storage:
+    description: Explicitly migrate metadata between configured storage providers.
+    default: op
+  worldmanagement.bypass.protection:
+    description: Bypass WorldManagement world protection.
+    default: op
+  worldmanagement.command.tp:
+    description: Teleport yourself to a managed world's spawn or coordinates.
+    default: op
+  worldmanagement.command.tp.others:
+    description: Teleport another online player to a managed world.
+    default: op
+  worldmanagement.command.tp.any.explicit:
+    description: Explicitly bypass managed world entry access for a teleport.
+    default: op

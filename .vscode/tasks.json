@@ -1,0 +1,57 @@
+{
+	"version": "2.0.0",
+	"tasks": [
+		{
+			"label": "WorldManagement full check",
+			"type": "shell",
+			"command": ".\\gradlew.bat",
+			"args": [
+				"check"
+			],
+			"isBackground": false,
+			"problemMatcher": [
+				"$gradle"
+			],
+			"group": "test"
+		},
+		{
+			"label": "WorldManagement Paper JAR smoke",
+			"type": "shell",
+			"command": ".\\gradlew.bat",
+			"args": [
+				"paperJarSmokeTest"
+			],
+			"isBackground": false,
+			"problemMatcher": [
+				"$gradle"
+			],
+			"group": "test"
+		},
+		{
+			"label": "WorldManagement console commands",
+			"type": "shell",
+			"command": ".\\gradlew.bat",
+			"args": [
+				"paperConsoleCommandTest"
+			],
+			"isBackground": false,
+			"problemMatcher": [
+				"$gradle"
+			],
+			"group": "test"
+		},
+		{
+			"label": "WorldManagement player E2E",
+			"type": "shell",
+			"command": ".\\gradlew.bat",
+			"args": [
+				"paperPlayerE2eTest"
+			],
+			"isBackground": false,
+			"problemMatcher": [
+				"$gradle"
+			],
+			"group": "test"
+		}
+	]
+}

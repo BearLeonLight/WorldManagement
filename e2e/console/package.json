@@ -1,0 +1,12 @@
+{
+  "name": "worldmanagement-console-e2e",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Paper console runtime tests for WorldManagement",
+  "engines": {
+    "node": ">=22"
+  },
+  "dependencies": {
+    "yaml": "2.8.1"
+  }
+}

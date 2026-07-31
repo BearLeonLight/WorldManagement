@@ -1,0 +1,11 @@
+commands:
+  root-aliases:
+    - worldmanager
+    - worldmanagement
+  modules:
+    warp:
+      aliases: []
+    ownership:
+      aliases: []
+    storage:
+      aliases: []
