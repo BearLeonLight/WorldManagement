@@ -98,6 +98,8 @@ function prepareServer (configuration) {
   fs.writeFileSync(path.join(pluginData, 'commands.yml'), [
     'commands:',
     '  root-aliases: [worldmanager]',
+    '  help:',
+    '    players-enabled: false',
     '  modules:',
     '    warp:',
     '      aliases: [wmwarp]',
@@ -140,6 +142,16 @@ function prepareServer (configuration) {
 }
 
 async function runConsoleMatrix (paper, logPath, serverRoot) {
+  await command(paper, logPath, 'wm help', 'WorldManagement 指令幫助', 'wm help')
+  await command(
+    paper, logPath, 'wm help ownership rank set',
+    '/wm ownership rank set <world> <player> <rank>', 'wm help <query...>'
+  )
+  await command(paper, logPath, 'worldmanager help 1', 'WorldManagement 指令幫助', 'wm help <query...>', false)
+  await feedback(paper, logPath, 'wm ownership rank', '/wm ownership rank set <world> <player> <rank>')
+  await feedback(paper, logPath, 'wm storage migrate YAML SQLITE nope', '指令包含無效的子指令或參數')
+  await feedback(paper, logPath, 'wm list detached extra', '指令包含多餘參數')
+
   await command(paper, logPath, 'wm list', '受管世界：', 'wm list')
   await command(paper, logPath, 'wm list detached', '目前沒有已停止管理的世界。', 'wm list detached')
   await command(paper, logPath, 'worldmanager list', '受管世界：', 'wm list')
@@ -284,6 +296,13 @@ async function command (paper, logPath, input, expected, commandPath, creditCove
   await waitForLog(logPath, expected, 30000, input, start)
   passedCommands++
   if (creditCoverage) coveredPaths.add(commandPath)
+}
+
+async function feedback (paper, logPath, input, expected) {
+  const start = normalizedLog(logPath).length
+  paper.stdin.write(`${input}\n`)
+  await waitForLog(logPath, expected, 30000, input, start)
+  passedCommands++
 }
 
 function writeMetadataFixture (worldsDirectory, metadata) {

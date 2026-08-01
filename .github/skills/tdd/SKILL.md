@@ -28,7 +28,7 @@ disable-model-invocation: false
 ## WorldManagement 契約測試
 
 - **領域與持久化**：驗證 rule 與 aggregate contract，僅依 storage interface；不得直接依賴 JDBC、SQL、YAML node 或檔案系統路徑。
-- **指令**：異動可見 command 時，依 `docs/command-architecture.md` 測試 canonical `CommandRoute`、parser、alias、permission visibility 和 completion。completion 只能使用 `SuggestionCatalog`、不可變 metadata snapshot 與 `OnlinePlayerSnapshot`。
+- **指令**：異動可見command時，先在唯一的`WorldManagementCommandSpec`建立red case，再依`docs/command-architecture.md`測試spec/compiler、Help/usage、canonical execution、parser、alias、permission/module visibility和completion；不得建立獨立Help、usage或Brigadier fixture清單。completion只能使用`SuggestionCatalog`、不可變metadata snapshot與`OnlinePlayerSnapshot`。
 - **授權**：驗證 owner、rank、access-control 與 Warp 的允許/拒絕結果，玩家名稱只能由線上快照解析為 UUID。
 - **非同步**：驗證工作移交與結果處理的邊界；不得在 command、listener 或 scheduler callback 內測試或加入 `get`、`join`。
 

@@ -30,6 +30,8 @@ commands:
   root-aliases:
     - worldmanager
     - worldmanagement
+  help:
+    players-enabled: true
   modules:
     warp:
       aliases: []
@@ -40,6 +42,8 @@ commands:
 ```
 
 所有 alias 都必須唯一，不能是 `wm`，也不能含有空白、`/` 或 `:`。若與既有命令衝突，WorldManagement 會跳過該 alias 並在啟動時記錄警告。設定檔變更必須重啟才會生效。Lifecycle 不支援獨立 alias，避免與其他插件的泛用命令衝突。
+
+`commands.help.players-enabled` 預設為 `true`，代表玩家可免 `worldmanagement.command.help` 使用一般 Help，但內容仍依各 command permission 與 module enablement 過濾。設為 `false` 時，玩家需 `worldmanagement.command.help` 或 `worldmanagement.command.help.all`；console/RCON 不受此開關限制。`help.all` 只略過 command permission，不會顯示停用 module。
 
 `config.yml` 選擇唯一有效 metadata provider。只能啟用一種 provider：
 

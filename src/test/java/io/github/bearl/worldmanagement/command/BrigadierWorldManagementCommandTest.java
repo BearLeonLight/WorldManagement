@@ -50,12 +50,23 @@ final class BrigadierWorldManagementCommandTest {
     }
 
     @Test
+    void helpSuggestionsTraverseTheSameLiteralSpecification() {
+        final Suggestions topLevel = suggestions("wm help own");
+        assertEquals(List.of("ownership"), topLevel.getList().stream().map(suggestion -> suggestion.getText()).toList());
+
+        final Suggestions nested = suggestions("wm help ownership r");
+        assertEquals(List.of("ownership rank"), nested.getList().stream().map(suggestion -> suggestion.getText()).toList());
+
+        assertEquals(List.of(), suggestions("wm help 2").getList());
+    }
+
+    @Test
     void importRequiresEnvironmentAndSuggestsSupportedValues() {
         final CommandDispatcher<CommandSourceStack> dispatcher = new CommandDispatcher<>();
         dispatcher.getRoot().addChild(new BrigadierWorldManagementCommand().build());
 
         assertFullyParsed(dispatcher, "wm import archive NETHER");
-        assertTrue(dispatcher.parse("wm import archive", SOURCE).getContext().getCommand() == null);
+        assertFullyParsed(dispatcher, "wm import archive");
 
         final String input = "wm import archive ";
         final Suggestions suggestions = suggestions(input);
@@ -79,7 +90,7 @@ final class BrigadierWorldManagementCommandTest {
         final CommandDispatcher<CommandSourceStack> dispatcher = new CommandDispatcher<>();
         dispatcher.getRoot().addChild(new BrigadierWorldManagementCommand().build());
 
-        assertTrue(dispatcher.parse("wm trust world spawn add player", SOURCE).getReader().canRead());
+        assertFullyParsed(dispatcher, "wm trust world spawn add player");
         assertFullyParsed(dispatcher, "wm warp trust world spawn add player");
     }
 
@@ -110,7 +121,7 @@ final class BrigadierWorldManagementCommandTest {
         dispatcher.getRoot().addChild(new BrigadierWorldManagementCommand().build());
 
         assertFullyParsed(dispatcher, "wm identity show creative");
-        assertTrue(dispatcher.parse("wm identity set creative confirm", SOURCE).getContext().getCommand() == null);
+        assertFullyParsed(dispatcher, "wm identity set creative confirm");
     }
 
     @Test
@@ -122,12 +133,8 @@ final class BrigadierWorldManagementCommandTest {
         assertFullyParsed(dispatcher, "wm identity accept-replacement creative confirm clear-warps");
         assertFullyParsed(dispatcher, "wm identity accept-replacement creative confirm keep-warps");
         assertFullyParsed(dispatcher, "wm identity abandon creative confirm");
-        assertTrue(dispatcher.parse(
-            "wm identity accept-replacement creative confirm", SOURCE
-        ).getContext().getCommand() == null);
-        assertTrue(dispatcher.parse(
-            "wm identity accept-replacement creative keep-warps confirm", SOURCE
-        ).getContext().getCommand() == null);
+        assertFullyParsed(dispatcher, "wm identity accept-replacement creative confirm");
+        assertFullyParsed(dispatcher, "wm identity accept-replacement creative keep-warps confirm");
     }
 
     @Test
@@ -137,7 +144,7 @@ final class BrigadierWorldManagementCommandTest {
 
         assertFullyParsed(dispatcher, "wm display-name set creative <gradient:red:gold>創意 世界</gradient>");
         assertFullyParsed(dispatcher, "wm display-name reset creative");
-        assertTrue(dispatcher.parse("wm display-name reset creative extra", SOURCE).getReader().canRead());
+        assertFullyParsed(dispatcher, "wm display-name reset creative extra");
     }
 
     @Test
@@ -149,7 +156,7 @@ final class BrigadierWorldManagementCommandTest {
         assertFullyParsed(dispatcher, "wm tp self creative 1.5 64 -2");
         assertFullyParsed(dispatcher, "wm tp player Alex creative 1.5 64 -2");
         assertFullyParsed(dispatcher, "wm tp --any creative");
-        assertTrue(dispatcher.parse("wm tp self creative 1.5 64", SOURCE).getContext().getCommand() == null);
+        assertFullyParsed(dispatcher, "wm tp self creative 1.5 64");
     }
 
     @Test
@@ -167,6 +174,49 @@ final class BrigadierWorldManagementCommandTest {
     }
 
     @Test
+    void dispatchesHelpQueryToTheStructuredHelpResponder() throws Exception {
+        final BrigadierWorldManagementCommand command = new BrigadierWorldManagementCommand();
+        final AtomicReference<CommandHelpService.Result> received = new AtomicReference<>();
+        command.initializeHelpResponder((sender, result) -> received.set(result));
+        final CommandDispatcher<CommandSourceStack> dispatcher = new CommandDispatcher<>();
+        dispatcher.getRoot().addChild(command.build());
+
+        dispatcher.execute("wm help 2", SOURCE);
+
+        final CommandHelpService.PageResult page = org.junit.jupiter.api.Assertions.assertInstanceOf(
+            CommandHelpService.PageResult.class,
+            received.get()
+        );
+        assertEquals(2, page.page().page());
+    }
+
+    @Test
+    void dispatchesNestedSyntaxFeedbackWithCanonicalTopicUsage() throws Exception {
+        final BrigadierWorldManagementCommand command = new BrigadierWorldManagementCommand();
+        final java.util.ArrayList<CommandSyntaxFeedback> received = new java.util.ArrayList<>();
+        command.initializeSyntaxFeedbackResponder((sender, feedback) -> received.add(feedback));
+        final CommandDispatcher<CommandSourceStack> dispatcher = new CommandDispatcher<>();
+        dispatcher.getRoot().addChild(command.build());
+
+        dispatcher.execute("wm", SOURCE);
+        dispatcher.execute("wm ownership rank", SOURCE);
+        dispatcher.execute("wm storage migrate yaml sqlite nope", SOURCE);
+        dispatcher.execute("wm list detached extra", SOURCE);
+
+        assertEquals(CommandSyntaxFeedback.Kind.MISSING, received.get(0).kind());
+        assertEquals("", received.get(0).topicPath());
+        assertEquals(CommandSyntaxFeedback.Kind.MISSING, received.get(1).kind());
+        assertEquals("ownership rank", received.get(1).topicPath());
+        assertTrue(received.get(1).usageLines().contains("/wm ownership rank set <world> <player> <rank>"));
+        assertEquals(CommandSyntaxFeedback.Kind.INVALID, received.get(2).kind());
+        assertEquals("storage migrate", received.get(2).topicPath());
+        assertEquals(List.of("/wm storage migrate <source> <target> confirm"), received.get(2).usageLines());
+        assertEquals(CommandSyntaxFeedback.Kind.EXTRA, received.get(3).kind());
+        assertEquals("list detached", received.get(3).topicPath());
+        assertEquals(List.of("/wm list detached"), received.get(3).usageLines());
+    }
+
+    @Test
     void everyExecutableLeafDeclaresItsMinimumRuntimeLevel() {
         final CommandNode<CommandSourceStack> root = new BrigadierWorldManagementCommand().build();
         final Set<String> executablePaths = executablePaths(root, "wm");
@@ -177,7 +227,7 @@ final class BrigadierWorldManagementCommandTest {
 
     private static Set<String> executablePaths(final CommandNode<CommandSourceStack> node, final String path) {
         final java.util.HashSet<String> paths = new java.util.HashSet<>();
-        if (node.getCommand() != null) {
+        if (node.getCommand() != null && !(node.getCommand() instanceof GeneratedSyntaxFeedbackCommand)) {
             paths.add(path);
         }
         for (final CommandNode<CommandSourceStack> child : node.getChildren()) {

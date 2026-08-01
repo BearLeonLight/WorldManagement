@@ -13,6 +13,7 @@ disable-model-invocation: false
 - Paper 遊戲執行緒、指令、監聽器與 scheduler callback 上的阻塞工作。
 - 不正確的 global、region、location 或 entity scheduler 親和性。
 - cache 一致性、並行 mutation、lock 與 shutdown 行為。
+- shutdown wrapper future與底層Paper operation lifetime是否分離追蹤；已提交的`teleportAsync`或相近operation不得因command result完成而提前自drain移除。
 - YAML、檔案系統、JDBC、audit 與 retry 行為。
 - 已棄用的 Java、Paper 或 Bukkit API。
 

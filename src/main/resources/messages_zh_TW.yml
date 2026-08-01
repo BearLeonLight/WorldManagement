@@ -2,8 +2,109 @@ format:
   prefix: "<dark_gray>[<aqua>WorldManagement</aqua>]</dark_gray> "
 command:
   root:
-    usage: "<gray>用法：</gray><white>/wm <adopt|create|load|unload|remove|manage|import|delete|identity|display-name|tp|warp|ownership|storage|list></white>"
+    usage: "<gray>用法：</gray><white>/wm <help|adopt|create|load|unload|remove|manage|import|delete|identity|display-name|tp|warp|ownership|storage|list></white>"
     unknown: "<prefix><red>未知的 WorldManagement 子指令。</red>"
+  help:
+    page-header: "<aqua>WorldManagement 指令幫助</aqua> <gray>第 <page>/<pages> 頁</gray>"
+    page-entry: "<yellow>/wm help <topic></yellow><gray> - </gray><description>"
+    topic-header: "<aqua>/wm <topic></aqua><gray> - </gray><description>"
+    usage: "<gray>用法：</gray><white><usage></white>"
+    children: "<gray>子指令：</gray><white><children></white>"
+    permissions: "<gray>權限：</gray><white><permissions></white>"
+    invalid-page: "<prefix><red>無效的幫助頁碼：<white><page></white>。</red>"
+    not-found: "<prefix><red>找不到可查看的指令幫助。</red>"
+    topic:
+      help:
+        description: "查看可用指令、分頁或指定指令路徑的說明。"
+      create:
+        description: "建立新世界並加入 WorldManagement 管理。"
+      adopt:
+        description: "接管已載入但尚未註冊的世界。"
+      load:
+        description: "載入受管世界。"
+      unload:
+        description: "卸載受管世界，可指定 fallback 世界。"
+      remove:
+        description: "停止管理世界，或確認清除 detached metadata。"
+      manage:
+        description: "將 detached 世界重新加入管理。"
+      import:
+        description: "從既有世界目錄匯入世界。"
+      delete:
+        description: "經確認流程永久刪除受管世界。"
+      identity:
+        description: "查看或修復世界識別狀態。"
+        show:
+          description: "顯示世界識別快照與驗證狀態。"
+        sync:
+          description: "同步待確認的世界識別快照。"
+        accept-replacement:
+          description: "接受 replacement identity 並選擇 Warp 處理方式。"
+        abandon:
+          description: "停止管理識別異常的世界。"
+      display-name:
+        description: "管理世界的可顯示名稱。"
+        set:
+          description: "設定世界顯示名稱。"
+        reset:
+          description: "重設世界顯示名稱。"
+      tp:
+        description: "將自己或其他線上玩家傳送至受管世界。"
+        self:
+          description: "將自己傳送至受管世界。"
+        player:
+          description: "將指定線上玩家傳送至受管世界。"
+        any:
+          description: "以明確 bypass 權限略過世界進入限制。"
+      warp:
+        description: "管理與使用世界傳送點。"
+        list:
+          description: "列出世界傳送點。"
+        set:
+          description: "在目前位置建立世界傳送點。"
+        delete:
+          description: "刪除世界傳送點。"
+        tp:
+          description: "傳送至可見的世界傳送點。"
+        trust:
+          description: "管理私人傳送點的信任名單。"
+      ownership:
+        description: "管理世界擁有者、階級與存取規則。"
+        owner:
+          description: "設定或移除世界擁有者。"
+          set:
+            description: "設定世界擁有者。"
+          remove:
+            description: "移除世界擁有者。"
+        rank:
+          description: "管理世界自訂階級與成員階級。"
+          create:
+            description: "建立世界自訂階級。"
+          delete:
+            description: "刪除世界自訂階級。"
+          set:
+            description: "設定線上玩家的世界階級。"
+          remove:
+            description: "移除線上玩家的世界階級。"
+          perm:
+            description: "新增或移除世界階級權限。"
+          toggle:
+            description: "切換世界階級系統。"
+        access:
+          description: "管理世界 access mode 與名單。"
+      storage:
+        description: "管理 metadata 儲存工具。"
+        migrate:
+          description: "驗證並遷移 metadata provider。"
+      list:
+        description: "列出受管世界。"
+        detached:
+          description: "列出已停止管理的世界。"
+  syntax:
+    missing: "<prefix><red>指令缺少必要參數。</red>"
+    invalid: "<prefix><red>指令包含無效的子指令或參數。</red>"
+    extra: "<prefix><red>指令包含多餘參數。</red>"
+    help-hint: "<gray>查看說明：</gray><white>/wm help<topic></white>"
   loading: "<prefix><yellow>WorldManagement 正在載入資料。</yellow>"
   permission:
     create: "<prefix><red>你沒有建立世界的權限。</red>"

@@ -26,6 +26,7 @@ disable-model-invocation: false
 - 非同步後 world/location/entity 的 thread affinity，`PluginIoExecutor` 與 `WorldThreadDispatcher` 邊界。
 - 單一 metadata provider、repository abstraction、cache snapshot、world name/path validation。
 - access-control、owner、rank、Warp、permission visibility、alias 與 snapshot-only completion。
+- 可見指令是否只在`WorldManagementCommandSpec`定義，且Brigadier trees、Help、usage/error、canonical execution與runtime leaf IDs皆由它派生；平行Help list、手寫usage catalog或第二份command tree視為具體漂移風險。
 - Java 25/Paper API 使用、已棄用 API、聚焦測試與可觀察契約文件。
 
 若 diff 涉及上述任何項目，另行使用 `Paper 效能審查員` 的唯讀意見，並在標準軸中獨立列出其發現。可補充標示命名、重複程式碼、primitive domain value、message chain 或多餘抽象等設計疑慮，但必須標記為 judgment call，不能當成硬性違規。

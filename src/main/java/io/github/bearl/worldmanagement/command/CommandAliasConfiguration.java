@@ -12,7 +12,8 @@ import java.util.Set;
 /** Immutable command labels loaded before Paper registers the Brigadier command trees. */
 public record CommandAliasConfiguration(
     List<String> rootAliases,
-    Map<ModuleId, List<String>> moduleAliases
+    Map<ModuleId, List<String>> moduleAliases,
+    boolean helpPlayersEnabled
 ) {
 
     private static final Set<ModuleId> ALIASABLE_MODULES = Set.of(ModuleId.WARP, ModuleId.OWNERSHIP, ModuleId.STORAGE);
@@ -39,8 +40,15 @@ public record CommandAliasConfiguration(
         moduleAliases = Map.copyOf(normalized);
     }
 
+    public CommandAliasConfiguration(
+        final List<String> rootAliases,
+        final Map<ModuleId, List<String>> moduleAliases
+    ) {
+        this(rootAliases, moduleAliases, true);
+    }
+
     public static CommandAliasConfiguration defaults() {
-        return new CommandAliasConfiguration(List.of("worldmanager", "worldmanagement"), Map.of());
+        return new CommandAliasConfiguration(List.of("worldmanager", "worldmanagement"), Map.of(), true);
     }
 
     public List<String> aliases(final ModuleId module) {

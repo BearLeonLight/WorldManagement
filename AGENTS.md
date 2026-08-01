@@ -13,7 +13,7 @@
 - 阻塞工作必須經 bounded `PluginIoExecutor`；queue 滿載或 shutdown 後的 submission 必須以 exceptional future 明確拒絕，不得阻塞、無界累積或在 caller thread 執行。指令、監聽器與 Paper scheduler callback 不得呼叫 `Future#get`、`join` 或進行阻塞等待。
 - 非同步完成處理器存取 Bukkit/Paper 的 world、location 或 entity 前，必須使用 `WorldThreadDispatcher`。
 - 權限、access-control、rank 與 Warp 檢查只能讀取不可變的記憶體快照。
-- shutdown 必須先停止 lifecycle admission並取消 plugin-owned scheduler/runtime pending operation，再以 future 串接有界排空；repository、audit與診斷資源只能由 I/O worker的 terminal action 關閉，不得建立未受管 drain thread或在 Paper thread等待。
+- shutdown 必須先停止 lifecycle admission並取消 plugin-owned scheduler/runtime pending operation，再以 future 串接有界排空；已提交的Paper operation必須將command result與底層runtime drain分離，不能以wrapper future完成宣稱operation已結束。任一`beginShutdown()`同步失敗或回傳null時，仍必須交由shutdown coordinator完成terminal close。repository、audit與診斷資源只能由 I/O worker的 terminal action 關閉，不得建立未受管 drain thread或在 Paper thread等待。
 
 ## 持久化與安全
 
@@ -32,11 +32,12 @@
 
 ## 指令契約
 
-- 唯一 canonical root 是 `/wm`。lifecycle 只能位於它的完整 tree 下；Warp、Ownership、Storage 的 alias 必須由 `commands.yml` 設定並經 Paper `PluginBootstrap` 註冊。
-- alias tree 必須透過 `CommandRoute` 產生相同 canonical arguments；不得依原始 command text、command label 或 `split()` 路由。
-- 每個 Brigadier branch 必須有 module enablement 與對應 permission visibility；參數相依的 world/owner/rank/access 授權保留在 domain handler。
+- 唯一 canonical root 是 `/wm`，`WorldManagementCommandSpec` 是指令結構的唯一來源。lifecycle 只能位於它的完整 tree 下；Warp、Ownership、Storage 的 alias 必須由 `commands.yml` 設定並經 Paper `PluginBootstrap` 從同一 spec 編譯。
+- canonical/root alias/module alias tree、Help、usage/error、permission/module metadata、completion binding、`CommandRoute` execution 與runtime leaf IDs必須由同一spec派生；不得另建手寫Brigadier tree、Help command list或usage catalog。
+- `CommandRoute` 只能使用 Brigadier 已解析的 arguments；不得依原始 command text、command label 或 `split()` 路由。
+- 每個 command spec node 必須有 module enablement 與對應 permission visibility；參數相依的 world/owner/rank/access 授權保留在 domain handler。
 - completion 只能使用 `SuggestionCatalog`、不可變 metadata snapshot 和 `OnlinePlayerSnapshot`。禁止在 completion 執行 YAML/JDBC/檔案 I/O、等待 future，或讀取可變 Bukkit world/location/entity。
-- 新增或修改可見指令時，必須同步更新 command tree、canonical route、`commands.yml` schema、權限、usage message、README、`docs/commands.md`、`docs/command-architecture.md` 與聚焦 parser/alias/permission/completion tests。
+- 新增或修改可見指令時，先更新唯一command spec，再同步domain handler、`commands.yml` alias/help schema、`paper-plugin.yml`權限、stable node ID對應locale、README、`docs/commands.md`、`docs/command-architecture.md`、runtime coverage與聚焦spec/compiler/parser/alias/access/completion/Help tests。
 - 玩家名稱參數只可由線上快照解析為 UUID；metadata 永遠保存 UUID，不得在指令或 completion 做離線玩家 lookup。
 
 ## 來源文件

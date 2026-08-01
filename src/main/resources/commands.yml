@@ -2,6 +2,8 @@ commands:
   root-aliases:
     - worldmanager
     - worldmanagement
+  help:
+    players-enabled: true
   modules:
     warp:
       aliases: []

@@ -20,6 +20,8 @@ public final class CommandAliasConfigurationLoader {
         "  root-aliases:",
         "    - worldmanager",
         "    - worldmanagement",
+        "  help:",
+        "    players-enabled: true",
         "  modules:",
         "    warp:",
         "      aliases: []",
@@ -43,9 +45,21 @@ public final class CommandAliasConfigurationLoader {
             moduleAliases.put(io.github.bearl.worldmanagement.module.ModuleId.WARP, document.getStringList("commands.modules.warp.aliases"));
             moduleAliases.put(io.github.bearl.worldmanagement.module.ModuleId.OWNERSHIP, document.getStringList("commands.modules.ownership.aliases"));
             moduleAliases.put(io.github.bearl.worldmanagement.module.ModuleId.STORAGE, document.getStringList("commands.modules.storage.aliases"));
-            return new CommandAliasConfiguration(document.getStringList("commands.root-aliases"), moduleAliases);
+            return new CommandAliasConfiguration(
+                document.getStringList("commands.root-aliases"),
+                moduleAliases,
+                loadHelpPlayersEnabled(document)
+            );
         } catch (final IOException exception) {
             throw new StorageException("Could not load command alias configuration.", exception);
         }
+    }
+
+    private boolean loadHelpPlayersEnabled(final YamlDocument document) {
+        final dev.dejvokep.boostedyaml.block.implementation.Section commands = document.getSection("commands");
+        final dev.dejvokep.boostedyaml.block.implementation.Section help = commands == null
+            ? null
+            : commands.getSection("help");
+        return help == null ? true : help.getBoolean("players-enabled", true);
     }
 }

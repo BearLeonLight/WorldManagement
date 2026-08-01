@@ -22,6 +22,7 @@ final class CommandAliasConfigurationLoaderTest {
 
         assertEquals(List.of("worldmanager", "worldmanagement"), configuration.rootAliases());
         assertEquals(List.of(), configuration.aliases(ModuleId.WARP));
+        assertTrue(configuration.helpPlayersEnabled());
         assertTrue(Files.isRegularFile(temporaryDirectory.resolve("commands.yml")));
     }
 
@@ -56,5 +57,17 @@ final class CommandAliasConfigurationLoaderTest {
             """);
 
         assertThrows(IllegalArgumentException.class, () -> new CommandAliasConfigurationLoader().load(temporaryDirectory));
+    }
+
+    @Test
+    void loadsPlayerHelpAccessSetting() throws Exception {
+        Files.writeString(temporaryDirectory.resolve("commands.yml"), """
+            commands:
+              root-aliases: []
+              help:
+                players-enabled: false
+            """);
+
+        assertTrue(!new CommandAliasConfigurationLoader().load(temporaryDirectory).helpPlayersEnabled());
     }
 }

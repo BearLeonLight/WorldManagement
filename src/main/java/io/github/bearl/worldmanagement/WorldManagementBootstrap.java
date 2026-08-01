@@ -21,6 +21,7 @@ public final class WorldManagementBootstrap implements PluginBootstrap {
     @Override
     public void bootstrap(final BootstrapContext context) {
         final CommandAliasConfiguration aliases = loadAliases(context);
+        commandComposition.command().initializeHelpAccess(aliases.helpPlayersEnabled());
         context.getLifecycleManager().registerEventHandler(LifecycleEvents.COMMANDS, event -> {
             final Commands commands = event.registrar();
             commands.register(

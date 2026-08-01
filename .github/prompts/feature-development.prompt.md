@@ -24,7 +24,7 @@ agent: "agent"
 
 1. 依已確認計畫進行最小且局部的修改，沿用既有套件結構、抽象介面與測試慣例。若需要擴大範圍，先說明原因、影響與替代方案，取得確認後再繼續。
 2. 儲存、檔案、YAML、JDBC、稽核與備份工作必須經 `PluginIoExecutor`；非同步完成後存取 Paper/Bukkit world、location 或 entity 前，使用 `WorldThreadDispatcher`。不得在指令、監聽器或 scheduler callback 中等待 future。
-3. 變更領域規則或持久化契約時，新增或更新聚焦測試。變更可觀察的指令、設定或行為時，同步更新 `README.md` 與對應的 `docs/` 契約。涉及指令時，必須遵守 `docs/command-architecture.md`：同步維護 Brigadier tree、`CommandRoute`、`commands.yml` aliases、權限可見性、snapshot-only completion、usage message 與 parser/alias/permission/completion tests。
+3. 變更領域規則或持久化契約時，新增或更新聚焦測試。變更可觀察的指令、設定或行為時，同步更新 `README.md` 與對應的 `docs/` 契約。涉及指令時，必須遵守 `docs/command-architecture.md`：先修改唯一的 `WorldManagementCommandSpec`，不得另建手寫Brigadier tree、Help或usage清單；同步domain handler、`commands.yml` alias/help schema、`paper-plugin.yml`權限、stable node ID locale、runtime coverage，以及spec/compiler/parser/alias/access/completion/Help tests。
 4. 每次實質程式碼修改後，先執行最窄的可用驗證；失敗時優先修正同一個行為切片，避免在未釐清前擴大修改範圍。
 
 ## 驗證與回報

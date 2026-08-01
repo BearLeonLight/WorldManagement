@@ -1,5 +1,13 @@
 # 指令
 
+## `/wm help [page|command path]`
+
+`/wm help` 顯示第 1 頁，每頁最多 6 個目前 sender 可見的頂層 topic；`/wm help <page>` 使用 1-based 頁碼；`/wm help <完整指令路徑>` 可查詢 group 或 leaf，例如 `/wm help ownership rank set`。command path 大小寫不敏感，Help completion 直接走訪實際 command specification。
+
+一般 Help 只顯示 sender 具有 command permission 且 module 已啟用的項目。`worldmanagement.command.help.all` 可查看所有已啟用 module 的指令說明，但不會略過 module enablement；不可見 topic 與不存在 topic 使用相同回覆，避免洩漏權限資訊。`worldmanagement.command.help` 與 `.help.all` 預設 OP，console/RCON 始終可使用 Help；玩家免權限預設值由 `commands.help.players-enabled` 控制。
+
+已知指令缺少參數、固定 literal 錯誤或 terminal 後出現多餘參數時，Brigadier 會依同一 specification 回覆最近可見的 canonical usage 與 `/wm help <topic>` 提示。這些錯誤不會落到全域 unknown-command handler，也不解析 raw command text。
+
 ## `/wm adopt <world>`
 
 權限：`worldmanagement.command.adopt`，預設 OP。
@@ -35,7 +43,7 @@
 
 以上 lifecycle 指令皆需各自的 `worldmanagement.command.<action>` 權限，預設 OP。`tp player` 另需 `worldmanagement.command.tp.others`，`tp --any` 另需 `worldmanagement.command.tp.any.explicit`。
 
-`/wm` 使用 Paper 的 Brigadier command tree。所有子指令使用 literal 或個別 argument node，不使用將剩餘文字合併的 greedy argument；tab completion 選取候選時只會取代游標所在參數。`create` 的 world、environment、world type 與 seed 是獨立 node，`NORMAL`、`NETHER`、`THE_END` 或世界 type 不會覆寫 `/wm create <world>` 的前置輸入。
+`/wm` 使用 Paper 的 Brigadier command tree。一般子指令使用 literal 或個別 argument node；只有 Help query 與 display name 這類真正需要保留空白的 terminal 值使用 greedy argument。tab completion 選取候選時只會取代目前 argument。`create` 的 world、environment、world type 與 seed 是獨立 node，`NORMAL`、`NETHER`、`THE_END` 或世界 type 不會覆寫 `/wm create <world>` 的前置輸入。
 
 可在 `commands.yml` 設定 `/wm` 的完整 tree alias，以及 `warp`、`ownership`、`storage` 模組的獨立 root alias。所有 lifecycle 指令仍只能由 `/wm` 或 root alias 呼叫。範例：設定 `warp.aliases: [warp]` 後，`/warp trust ...` 等同 `/wm warp trust ...`，保留原生 Brigadier completion。與既有伺服器命令衝突的 alias 會被跳過並在啟動時警告；變更需重啟後生效。完整契約見 [指令架構](command-architecture.md)。
 

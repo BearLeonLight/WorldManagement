@@ -73,6 +73,7 @@ public final class WorldManagementCommand {
     private final StorageMigrationService migrationService;
     private final MessageService messages;
     private final CommandMessageSender messageSender;
+    private final CommandHelpMessageRenderer helpMessages;
     private final java.util.Map<String, WorldManagementCommandModule> modules;
     private final OnlinePlayerSnapshot onlinePlayers;
     private final DiagnosticLogger diagnostics;
@@ -152,6 +153,7 @@ public final class WorldManagementCommand {
         this.migrationService = Objects.requireNonNull(migrationService, "migrationService");
         this.messages = Objects.requireNonNull(messages, "messages");
         this.messageSender = Objects.requireNonNull(messageSender, "messageSender");
+        this.helpMessages = new CommandHelpMessageRenderer(messages);
         this.onlinePlayers = Objects.requireNonNull(onlinePlayers, "onlinePlayers");
         this.diagnostics = diagnostics;
         this.teleportBypassTokens = Objects.requireNonNull(teleportBypassTokens, "teleportBypassTokens");
@@ -173,6 +175,16 @@ public final class WorldManagementCommand {
             "identity", identityModule,
             "display-name", displayNameModule
         );
+    }
+
+    void showHelp(final CommandSender sender, final CommandHelpService.Result result) {
+        helpMessages.render(result).forEach(component -> messageSender.send(sender, component));
+    }
+
+    void showSyntaxFeedback(final CommandSender sender, final CommandSyntaxFeedback feedback) {
+        send(sender, "command.syntax." + feedback.kind().name().toLowerCase(Locale.ROOT));
+        feedback.usageLines().forEach(usage -> send(sender, "command.help.usage", "usage", usage));
+        send(sender, "command.syntax.help-hint", "topic", feedback.topicPath().isBlank() ? "" : " " + feedback.topicPath());
     }
 
     public boolean execute(final CommandSender sender, final String[] arguments) {

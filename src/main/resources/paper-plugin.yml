@@ -13,6 +13,14 @@ dependencies:
       required: false
       join-classpath: true
 permissions:
+  worldmanagement.command.help:
+    description: View command help for commands available to the sender.
+    default: op
+  worldmanagement.command.help.all:
+    description: View help for every command in enabled modules regardless of command permission.
+    default: op
+    children:
+      worldmanagement.command.help: true
   worldmanagement.command.adopt:
     description: Register an already loaded world with WorldManagement.
     default: op

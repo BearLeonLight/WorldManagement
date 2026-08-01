@@ -32,7 +32,7 @@ WorldManagement 是面向 Paper 伺服器的世界管理插件，目標是提供
 
 測試完整伺服器輸出會保留在 `build/paper-jar-smoke/latest.log`，供啟動失敗時檢查。一般 `check` 不會隱式下載或啟動伺服器，確保離線單元測試仍可執行。
 
-不需要玩家身分或遊戲內狀態的 Paper runtime 指令，使用獨立的控制台矩陣。此 task 不執行 `npm ci`，不啟動 Mineflayer，也不安裝 Via；它會驗證 29 個 console runtime leaves、42 個 console command outcomes、root/module aliases、world storage、metadata、identity recovery、quarantine、migration target 與正常 shutdown：
+不需要玩家身分或遊戲內狀態的 Paper runtime 指令，使用獨立的控制台矩陣。此 task 不執行 `npm ci`，不啟動 Mineflayer，也不安裝 Via；它會驗證 31 個 console runtime leaves、48 個 console command outcomes、Help 與巢狀錯誤導引、root/module aliases、world storage、metadata、identity recovery、quarantine、migration target 與正常 shutdown：
 
 ```powershell
 .\gradlew.bat paperConsoleCommandTest
@@ -44,13 +44,21 @@ WorldManagement 是面向 Paper 伺服器的世界管理插件，目標是提供
 .\gradlew.bat paperPlayerE2eTest
 ```
 
-Paper JAR 選擇參數與 `paperJarSmokeTest` 相同。Via fallback 預設動態使用目前 Mineflayer `testedVersions` 的最新版，也可用 `-PmineflayerMinecraftVersion=<version>` 只覆寫 fallback client；原生模式永遠使用 status ping 對應版本。必要的 `paperJarSmokeTest` 固定使用隔離 SQLite provider，console matrix 與玩家 E2E 使用 YAML provider；三者都會要求 terminal repository/audit/diagnostic close 的成功 marker，並將 classloader、I/O drain 或 shutdown timeout warning 視為失敗。player suite由Paper console的dimension與事件探針驗證實際registry world key、傳送、respawn及保護結果，不只比較Mineflayer快取或localized聊天文字。console log 保留在 `build/console-command-test/latest.log`；player attempt logs 分別保留在 `build/player-e2e/native/latest.log` 與 `build/player-e2e/via-fallback/latest.log`，成功 attempt 另複製為 `build/player-e2e/latest.log`。Via與LuckPerms artifacts都快取於Gradle user home；console與原生協定判斷不會取得Via artifacts。
+Paper JAR 選擇參數與 `paperJarSmokeTest` 相同。Via fallback 預設動態使用目前 Mineflayer `testedVersions` 的最新版，也可用 `-PmineflayerMinecraftVersion=<version>` 只覆寫 fallback client；原生模式永遠使用 status ping 對應版本。必要的 `paperJarSmokeTest` 固定使用隔離 SQLite provider，console matrix 與玩家 E2E 使用 YAML provider；三者都會要求 terminal repository/audit/diagnostic close 的成功 marker，並將 classloader、I/O drain 或 shutdown timeout warning 視為失敗。player suite由Paper console的dimension與事件探針驗證實際registry world key、傳送、respawn及保護結果，不只比較Mineflayer快取或localized聊天文字。replacement respawn案例會以一次性的`PlayerRespawnEvent`測試目的地明確進入CONFLICT world，再確認production post-respawn relocation回到安全fallback；不依賴replacement UUID後可能失效的vanilla個人spawnpoint。console log 保留在 `build/console-command-test/latest.log`；player attempt logs 分別保留在 `build/player-e2e/native/latest.log` 與 `build/player-e2e/via-fallback/latest.log`，成功 attempt 另複製為 `build/player-e2e/latest.log`。Via與LuckPerms artifacts都快取於Gradle user home；console與原生協定判斷不會取得Via artifacts。
 
 `e2e/command-runtime-coverage.txt` 將每個 Brigadier executable path 分類為 `CONSOLE_RUNTIME` 或 `PLAYER_RUNTIME`。JUnit 會把這份宣告與實際 command tree 做完整集合比對；新增 leaf 卻未分類、重複 path 或未知層級都會讓 `check` 失敗。兩個 runtime runner 也會分別驗證自己實際執行的 canonical leaf IDs，並在發送前比對 command literal skeleton、argument arity 與 aliases；不能以訊息 assertion 數量代替 leaf coverage。runtime task 會先執行純 Node harness tests，確認 leaf mapping 與 build child 目錄 guard，避免錯誤環境變數刪除 build 外路徑。
 
 可部署的 shaded JAR 位於 `build/libs/`，已內含 BoostedYAML、SQLite 與 MySQL JDBC driver，並 relocate BoostedYAML/SnakeYAML。將該 JAR 放入 Paper 伺服器的 `plugins/` 目錄，重新啟動伺服器。
 
 ## 基本操作範例
+
+查看目前有權使用且所屬模組已啟用的指令，或查詢完整 canonical command path：
+
+```text
+/wm help
+/wm help 2
+/wm help ownership rank set
+```
 
 建立並管理一個一般世界，設定顯示名稱，再將自己傳送進去：
 
@@ -155,10 +163,13 @@ WorldManagement 在 `INFO` 層級輸出精簡的啟動階段摘要：設定與 s
 - YAML、SQLite、MySQL/MariaDB metadata provider，且永遠只有一個有效 provider；SQL 使用 HikariCP
 - YAML atomic write、備份、毀損隔離；JSONL rotation 或 SQL audit store
 - SQL metadata mutation 與其成功 audit event 使用同一 JDBC transaction；YAML provider 保持 metadata 原子檔案寫入後的非阻塞 JSONL audit
-- `/wm` 採 Paper Brigadier + `PluginBootstrap` command tree；`commands.yml` 可設定 root/module aliases，並保留原生 permission-aware completion
+- `/wm` 採單一 immutable command specification，經 Paper Brigadier + `PluginBootstrap` 編譯實際 tree；同一 spec 驅動 Help、usage/error、權限/模組可見性、completion、canonical routes與runtime leaf IDs
+- `/wm help [page|command path]` 支援 1-based 分頁與完整巢狀 path；錯誤子指令、缺少或多餘參數會回覆最近可見 usage 與 Help 提示
+- `commands.yml` 可設定 root/module aliases與玩家是否預設免 Help 權限，Help topic與completion會依 sender permission及module enablement過濾
+- completion只讀不可變metadata與線上玩家snapshot；Warp只提示可由metadata證明對所有玩家可用的PUBLIC候選，owner/bypass管理型world參數在尚無authorization snapshot時需手動輸入world ID，最終授權仍由指令執行階段處理
 - `modules.yml` 提供 lifecycle、warp、ownership、protection、storage 的獨立功能開關；停用模組時其 command branch 與 listener 不會啟用
 - `OFF`、`BEST_EFFORT`、`STRICT` audit policy；破壞性操作在 strict audit 無法排入時會拒絕
-- bounded單一I/O worker、migration期間metadata mutation freeze/target rollback，以及不阻塞Paper thread的event-driven shutdown；terminal resource close 由有硬上限的受管 daemon worker 逐項隔離，既有 I/O 或 close 忽略 interrupt 時仍會嘗試後續資源，逾時 future 會明確失敗
+- bounded單一I/O worker、migration期間metadata mutation freeze/target rollback，以及不阻塞Paper thread的event-driven shutdown；未提交的teleport會立即拒絕，已提交的`teleportAsync`會與指令結果分離並持續drain到底層Paper future完成；同步shutdown admission失敗不會跳過terminal resource close。terminal resource close由有硬上限的受管daemon worker逐項隔離，既有I/O或close忽略interrupt時仍會嘗試後續資源，逾時future會明確失敗
 - WorldManagement 專用 `OFF/BASIC/VERBOSE` 診斷、area allowlist、Paper console 與 bounded rotating file sink
 - 可選 LuckPerms Warp外部權限整合；以已載入且identity相符的目的Bukkit world建立cached permission context，玩家名稱仍只由線上快照解析，WorldManagement rank不映射為LuckPerms group
 - `messages_zh_TW.yml` 使用 Adventure MiniMessage，集中管理全部指令回覆、可選共用前綴與逐語意訊息 key
