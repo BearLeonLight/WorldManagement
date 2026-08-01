@@ -74,6 +74,7 @@ public final class WorldManagementCommand {
     private final MessageService messages;
     private final CommandMessageSender messageSender;
     private final CommandHelpMessageRenderer helpMessages;
+    private final WorldListMessageRenderer listMessages;
     private final java.util.Map<String, WorldManagementCommandModule> modules;
     private final OnlinePlayerSnapshot onlinePlayers;
     private final DiagnosticLogger diagnostics;
@@ -154,6 +155,7 @@ public final class WorldManagementCommand {
         this.messages = Objects.requireNonNull(messages, "messages");
         this.messageSender = Objects.requireNonNull(messageSender, "messageSender");
         this.helpMessages = new CommandHelpMessageRenderer(messages);
+        this.listMessages = new WorldListMessageRenderer(messages);
         this.onlinePlayers = Objects.requireNonNull(onlinePlayers, "onlinePlayers");
         this.diagnostics = diagnostics;
         this.teleportBypassTokens = Objects.requireNonNull(teleportBypassTokens, "teleportBypassTokens");
@@ -249,28 +251,54 @@ public final class WorldManagementCommand {
     }
 
     private boolean create(final CommandSender sender, final String actor, final String[] arguments) {
+        if (arguments.length != 4) {
+            send(sender, "command.create.usage");
+            return true;
+        }
+        return executeCreate(
+            sender,
+            arguments[1],
+            arguments[2],
+            arguments[3],
+            CreateCommandOptions.defaults()
+        );
+    }
+
+    boolean executeCreate(
+        final CommandSender sender,
+        final String suppliedWorldName,
+        final String suppliedEnvironment,
+        final String suppliedType,
+        final CreateCommandOptions options
+    ) {
         if (!sender.hasPermission(CREATE_PERMISSION)) {
             send(sender, "command.permission.create");
             return true;
         }
-        if (arguments.length < 2 || arguments.length > 5) {
-            send(sender, "command.create.usage");
-            return true;
-        }
+        Objects.requireNonNull(options, "options");
+        final String actor = actorOf(sender);
         final String worldName;
         try {
-            worldName = nameValidator.requireValidName(arguments[1]);
-            final WorldRuntimeGateway.WorldEnvironment environment = arguments.length >= 3
-                ? WorldRuntimeGateway.WorldEnvironment.valueOf(arguments[2].toUpperCase(Locale.ROOT))
-                : WorldRuntimeGateway.WorldEnvironment.NORMAL;
-            final WorldRuntimeGateway.WorldType type = arguments.length >= 4
-                ? WorldRuntimeGateway.WorldType.valueOf(arguments[3].toUpperCase(Locale.ROOT))
-                : WorldRuntimeGateway.WorldType.NORMAL;
-            final Long seed = arguments.length == 5 ? Long.valueOf(arguments[4]) : null;
+            worldName = nameValidator.requireValidName(suppliedWorldName);
+            final WorldRuntimeGateway.WorldEnvironment environment = WorldRuntimeGateway.WorldEnvironment.valueOf(
+                suppliedEnvironment.toUpperCase(Locale.ROOT)
+            );
+            final WorldRuntimeGateway.WorldType type = WorldRuntimeGateway.WorldType.valueOf(
+                suppliedType.toUpperCase(Locale.ROOT)
+            );
             send(sender, "command.create.started", "world", worldName);
             final AuditEvent event = auditEvent(actor, "world.create", worldName, "");
             final CommandMessageSender.Target responseTarget = messageSender.capture(sender);
-            threadDispatcher.executeGlobal(() -> lifecycleService.create(worldName, environment, type, seed, event)
+            threadDispatcher.executeGlobal(() -> lifecycleService.create(
+                new io.github.bearl.worldmanagement.world.lifecycle.WorldCreationRequest(
+                    worldName,
+                    environment,
+                    type,
+                    options.seed(),
+                    options.generator().map(io.github.bearl.worldmanagement.world.WorldGeneratorReference::parse)
+                ),
+                event
+            )
                 .whenComplete((result, failure) -> respond(responseTarget, failure == null && result.status() == WorldLifecycleCoordinator.CreateStatus.CREATED
                     ? "command.create.success" : "command.create.failure", "world", worldName)));
         } catch (final IllegalArgumentException exception) {
@@ -662,8 +690,7 @@ public final class WorldManagementCommand {
             send(sender, detached ? "command.list.detached-empty" : "command.list.empty");
             return true;
         }
-        send(sender, detached ? "command.list.detached-result" : "command.list.result", "worlds", worlds.stream().map(WorldMetadata::worldName)
-            .reduce((left, right) -> left + ", " + right).orElseThrow());
+        messageSender.send(sender, listMessages.render(worlds, detached));
         return true;
     }
 

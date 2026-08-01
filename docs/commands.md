@@ -20,7 +20,7 @@
 
 權限：`worldmanagement.command.list`，預設 OP。
 
-列出 WorldManagement 記憶體快取中的受管世界；加入 `detached` 可列出已停止管理、但仍保留 metadata 的世界。此指令不讀取 YAML 或 SQL。
+列出 WorldManagement 記憶體快取中的受管世界；加入 `detached` 可列出已停止管理、但仍保留 metadata 的世界。每個世界使用 `<world-id或顯示名稱> - <NORMAL|NETHER|THE_END|CUSTOM>` 格式逐行顯示；設定顯示名稱後以該名稱為主，游標停留時顯示不可變的 world ID。此指令不讀取 YAML、SQL 或 Bukkit world。
 
 ## 訊息輸出
 
@@ -30,7 +30,7 @@
 
 ## World Lifecycle
 
-- `/wm create <world> [NORMAL|NETHER|THE_END] [NORMAL|FLAT|AMPLIFIED|LARGE_BIOMES] [seed]`
+- `/wm create <world> <NORMAL|NETHER|THE_END> <NORMAL|FLAT|AMPLIFIED|LARGE_BIOMES> [--seed <seed>] [--generator <plugin[:id]>]`：environment與world type為必填。`--seed`與`--generator`可任意排序、各只能出現一次；已輸入的flag不再出現在後續completion。generator completion只讀取主執行緒更新的有效plugin名稱不可變snapshot，仍可手動輸入`plugin:id`。generator reference會寫入metadata，後續load與補償reload無法重新解析時會拒絕載入，不會退回vanilla生成器。
 - `/wm load <world>`、`/wm unload <world> [fallback]`：metadata desired state 會先持久化，再由 Paper global scheduler 嘗試載入或卸載。卸載有玩家時，`fallback`（若指定）必須是不同且已載入的世界；未指定時使用設定 fallback 或 Paper primary world。卸載會先顯式存檔，存檔失敗時保留已載入世界並回報失敗。
 - `/wm remove <world>`：只接受 desired state 為 `UNLOADED` 的世界，將 metadata 標記為 `DETACHED`，保留世界檔案與 metadata。
 - `/wm manage <world>`：將 `DETACHED` metadata 重新設為受管理的 `ACTIVE` 世界。
@@ -43,7 +43,7 @@
 
 以上 lifecycle 指令皆需各自的 `worldmanagement.command.<action>` 權限，預設 OP。`tp player` 另需 `worldmanagement.command.tp.others`，`tp --any` 另需 `worldmanagement.command.tp.any.explicit`。
 
-`/wm` 使用 Paper 的 Brigadier command tree。一般子指令使用 literal 或個別 argument node；只有 Help query 與 display name 這類真正需要保留空白的 terminal 值使用 greedy argument。tab completion 選取候選時只會取代目前 argument。`create` 的 world、environment、world type 與 seed 是獨立 node，`NORMAL`、`NETHER`、`THE_END` 或世界 type 不會覆寫 `/wm create <world>` 的前置輸入。
+`/wm` 使用 Paper 的 Brigadier command tree。一般子指令使用 literal 或個別 argument node；Help query、display name及`create` options等真正需要保留多個token的terminal值使用typed或greedy argument。tab completion選取候選時只會取代目前argument。`create`的world、environment與world type是獨立node，最後由typed options parser處理可任意排序的flags；domain handler不解析raw command text。
 
 可在 `commands.yml` 設定 `/wm` 的完整 tree alias，以及 `warp`、`ownership`、`storage` 模組的獨立 root alias。所有 lifecycle 指令仍只能由 `/wm` 或 root alias 呼叫。範例：設定 `warp.aliases: [warp]` 後，`/warp trust ...` 等同 `/wm warp trust ...`，保留原生 Brigadier completion。與既有伺服器命令衝突的 alias 會被跳過並在啟動時警告；變更需重啟後生效。完整契約見 [指令架構](command-architecture.md)。
 
@@ -62,12 +62,12 @@
 ## Warps
 
 - `/wm warp list <world>`
-- `/wm warp set <world> <name> <PUBLIC|PRIVATE>`：限目標世界 owner 或 protection bypass，且執行者必須站在目標世界。
+- `/wm warp set <world> <name> <PUBLIC|PRIVATE>`：限目標世界 owner 或 Warp 管理員，且執行者必須站在目標世界。
 - `/wm warp delete <world> <name>`
 - `/wm warp tp <world> <name>`
 - `/wm warp trust <world> <warp> <add|remove> <player-name-or-uuid>`：只接受目前線上玩家名稱或 UUID；metadata 永遠保存 UUID，不會進行離線查詢。
 
-`worldmanagement.command.warp` 預設所有玩家可用。設定、刪除與 trust 仍要求 owner/bypass；`worldmanagement.command.trust` 預設 OP。
+`worldmanagement.command.warp` 預設所有玩家可用。設定與刪除仍要求目標世界 owner 或 `worldmanagement.admin.warp.manage`；trust 另需預設 OP 的 `worldmanagement.command.trust`。`worldmanagement.admin.*` 會包含 Warp 與 ownership 全域管理權限。
 
 將 `warp.enabled` 設為 `false` 時，Warp 與 trust 子命令會直接拒絕，不會讀取或變更 metadata。
 
@@ -81,7 +81,11 @@
 - `/wm ownership access <world> mode <NONE|WHITELIST|BLACKLIST>`
 - `/wm ownership access <world> <add|remove> <player-name-or-uuid>`
 
-以上命令各需 `worldmanagement.command.owner`、`worldmanagement.command.rank` 或 `worldmanagement.command.access`，預設 OP。rank、access 管理還要求目標世界 owner 或 `worldmanagement.bypass.protection`。`ownership.maximum-custom-ranks` 強制限制每個世界的自訂 rank 數量；`OWNER` 和 `GUEST` 是不可刪除的系統 rank，且 `OWNER` 的 permissions 不可修改。
+以上命令各需 `worldmanagement.command.owner`、`worldmanagement.command.rank` 或 `worldmanagement.command.access`，預設 OP。command permission只代表可以使用該指令，不代表能管理所有世界。
+
+`owner set` 與 `owner remove` 一律另需 `worldmanagement.admin.ownership.manage`；世界 owner 不可自行轉讓或放棄。rank與access操作允許目標世界owner，持有`worldmanagement.admin.ownership.manage`則可管理所有受管世界。`worldmanagement.admin.*`預設OP並包含`worldmanagement.admin.ownership.manage`及`worldmanagement.admin.warp.manage`。`worldmanagement.bypass.protection`只略過保護與進入檢查，不再授予ownership或Warp metadata管理能力。
+
+`ownership.maximum-custom-ranks`強制限制每個世界的自訂rank數量；`OWNER`和`GUEST`是不可刪除的系統rank，且`OWNER`的permissions不可修改。
 
 ## Storage Migration
 
@@ -95,6 +99,6 @@ LuckPerms 為optional dependency。`hooks.yml`啟用且LuckPerms服務可用時�
 
 指令completion只能讀取不可變metadata與線上玩家snapshot，因此Warp候選採保守規則：只列出identity已驗證、沒有`required-permission`，且能由metadata證明對任何玩家皆可使用的PUBLIC Warp。依賴owner、bypass、玩家rank、private trust或外部permission的Warp不會出現在候選清單。玩家仍可手動輸入Warp名稱；執行階段會以玩家snapshot、WorldManagement policy與目的世界context做完整最終授權。
 
-Warp設定、刪除、trust及ownership rank/access等需要owner或bypass的世界參數同樣不讀live sender permission；在尚未建立不可變authorization snapshot前不提供世界候選，管理員需手動輸入world ID。執行階段仍會做完整owner/bypass授權，不會因completion保守策略而放寬權限。
+Warp設定、刪除、trust及ownership rank/access的世界參數只讀每秒更新的不可變command authorization snapshot。一般玩家只取得自己擁有的世界候選；持有對應`worldmanagement.admin.ownership.manage`或`worldmanagement.admin.warp.manage`的玩家取得所有受管世界候選。管理員專用的owner set/remove只對ownership管理員提供候選。後續rank ID與Warp名稱也沿用相同scope，未知或尚未進入snapshot的玩家回傳空候選。權限變動最多約一秒才反映在候選中，但執行階段每次都以即時permission與immutable metadata做最終授權。
 
 目前沒有設定Warp `required-permission`的管理指令；此欄位只存在於metadata/provider契約。若透過受控資料遷移或管理工具設定，查詢時仍會套用上述目的世界context規則。

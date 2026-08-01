@@ -29,12 +29,23 @@ public final class SuggestionCatalog {
     public static final SuggestionKey<String> SYNC_PENDING_WORLD = new SuggestionKey<>("sync-pending-world", String.class);
     public static final SuggestionKey<String> CONFLICT_WORLD = new SuggestionKey<>("conflict-world", String.class);
     public static final SuggestionKey<String> NON_VERIFIED_WORLD = new SuggestionKey<>("non-verified-world", String.class);
+    public static final SuggestionKey<String> GENERATOR_PLUGIN = new SuggestionKey<>("generator-plugin", String.class);
 
     private final AtomicReference<WorldManagementService> service = new AtomicReference<>();
+    private final AtomicReference<List<String>> generatorPlugins = new AtomicReference<>(List.of());
     private final OnlinePlayerSnapshot players;
+    private final CommandAuthorizationSnapshot authorizations;
 
     public SuggestionCatalog(final OnlinePlayerSnapshot players) {
+        this(players, new CommandAuthorizationSnapshot());
+    }
+
+    public SuggestionCatalog(
+        final OnlinePlayerSnapshot players,
+        final CommandAuthorizationSnapshot authorizations
+    ) {
         this.players = Objects.requireNonNull(players, "players");
+        this.authorizations = Objects.requireNonNull(authorizations, "authorizations");
     }
 
     public void initialize(final WorldManagementService worldManagementService) {
@@ -86,16 +97,53 @@ public final class SuggestionCatalog {
             .toList();
     }
 
-    public Collection<String> manageableWorlds() {
-        return List.of();
-    }
-
-    public Collection<String> warpNames(final String worldName) {
+    public Collection<String> manageableWorlds(
+        final CommandSourceStack source,
+        final CommandAuthorizationSnapshot.ManagementArea area
+    ) {
         final WorldManagementService current = service.get();
         if (current == null) {
             return List.of();
         }
-        return current.managedWorld(worldName).map(metadata -> metadata.warps().keySet().stream().sorted().toList()).orElseGet(List::of);
+        final CommandAuthorizationSnapshot.Scope scope = authorizations.scope(source.getSender(), area);
+        if (!scope.known()) {
+            return List.of();
+        }
+        return current.managedWorlds().stream()
+            .filter(metadata -> scope.managesAllWorlds()
+                || scope.playerId().map(playerId -> metadata.owner().equals(playerId.toString())).orElse(false))
+            .map(WorldMetadata::worldName)
+            .sorted()
+            .toList();
+    }
+
+    public Collection<String> administrativeWorlds(
+        final CommandSourceStack source,
+        final CommandAuthorizationSnapshot.ManagementArea area
+    ) {
+        final WorldManagementService current = service.get();
+        if (current == null) {
+            return List.of();
+        }
+        final CommandAuthorizationSnapshot.Scope scope = authorizations.scope(source.getSender(), area);
+        return scope.known() && scope.managesAllWorlds()
+            ? current.managedWorlds().stream().map(WorldMetadata::worldName).sorted().toList()
+            : List.of();
+    }
+
+    public Collection<String> warpNames(
+        final CommandSourceStack source,
+        final String worldName,
+        final CommandAuthorizationSnapshot.ManagementArea area
+    ) {
+        final WorldManagementService current = service.get();
+        if (current == null) {
+            return List.of();
+        }
+        return current.managedWorld(worldName)
+            .filter(metadata -> canManage(source, metadata, area))
+            .map(metadata -> metadata.warps().keySet().stream().sorted().toList())
+            .orElseGet(List::of);
     }
 
     public Collection<String> visibleWarpNames(final String worldName) {
@@ -114,16 +162,42 @@ public final class SuggestionCatalog {
             .orElseGet(List::of);
     }
 
-    public Collection<String> rankIds(final String worldName) {
+    public Collection<String> rankIds(final CommandSourceStack source, final String worldName) {
         final WorldManagementService current = service.get();
         if (current == null) {
             return List.of();
         }
-        return current.managedWorld(worldName).map(metadata -> metadata.ranks().keySet().stream().sorted().toList()).orElseGet(List::of);
+        return current.managedWorld(worldName)
+            .filter(metadata -> canManage(source, metadata, CommandAuthorizationSnapshot.ManagementArea.OWNERSHIP))
+            .map(metadata -> metadata.ranks().keySet().stream().sorted().toList())
+            .orElseGet(List::of);
     }
 
     public Collection<String> onlinePlayers() {
         return players.names();
+    }
+
+    public void replaceGeneratorPlugins(final Collection<String> plugins) {
+        generatorPlugins.set(Objects.requireNonNull(plugins, "plugins").stream()
+            .map(plugin -> Objects.requireNonNull(plugin, "plugin"))
+            .filter(plugin -> !plugin.isBlank())
+            .distinct()
+            .sorted(String.CASE_INSENSITIVE_ORDER)
+            .toList());
+    }
+
+    public Collection<String> generatorPlugins() {
+        return generatorPlugins.get();
+    }
+
+    private boolean canManage(
+        final CommandSourceStack source,
+        final WorldMetadata metadata,
+        final CommandAuthorizationSnapshot.ManagementArea area
+    ) {
+        final CommandAuthorizationSnapshot.Scope scope = authorizations.scope(source.getSender(), area);
+        return scope.known() && (scope.managesAllWorlds()
+            || scope.playerId().map(playerId -> metadata.owner().equals(playerId.toString())).orElse(false));
     }
 
     private static boolean universallyVisible(final WorldMetadata metadata, final WorldWarp warp) {

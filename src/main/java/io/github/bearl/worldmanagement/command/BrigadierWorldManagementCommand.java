@@ -40,7 +40,7 @@ public final class BrigadierWorldManagementCommand {
         this.helpService = new CommandHelpService(specification.root(), accessPolicy, 6);
         this.compiler = new BrigadierCommandSpecCompiler(
             accessPolicy,
-            (context, execution) -> execute(context, execution.route(), execution.argumentNames()),
+            (context, execution) -> execute(context, execution.route(), execution.arguments()),
             this::executeSyntaxFeedback
         );
     }
@@ -95,14 +95,13 @@ public final class BrigadierWorldManagementCommand {
     private int execute(
         final com.mojang.brigadier.context.CommandContext<CommandSourceStack> context,
         final CommandRoute route,
-        final List<String> argumentNames
+        final List<CommandArgumentBinding> arguments
     ) {
         final CommandSender sender = context.getSource().getSender();
-        final List<String> parsedArguments = argumentNames.stream()
-            .map(name -> context.getArgument(name, String.class))
-            .toList();
+        final List<Object> parsedArguments = new java.util.ArrayList<>(arguments.size());
+        arguments.forEach(binding -> parsedArguments.add(context.getArgument(binding.name(), binding.type())));
         if (route.prefix().equals(List.of("help")) && route.suffix().isEmpty()) {
-            final String query = parsedArguments.isEmpty() ? "" : parsedArguments.getFirst();
+            final String query = parsedArguments.isEmpty() ? "" : (String) parsedArguments.getFirst();
             helpResponder.get().accept(sender, helpService.resolve(sender, query));
             return com.mojang.brigadier.Command.SINGLE_SUCCESS;
         }
@@ -111,7 +110,19 @@ public final class BrigadierWorldManagementCommand {
             loadingResponder.get().accept(sender);
             return 0;
         }
-        commandHandler.execute(sender, route.arguments(parsedArguments));
+        if (route.prefix().equals(List.of("create")) && route.suffix().isEmpty()) {
+            commandHandler.executeCreate(
+                sender,
+                (String) parsedArguments.get(0),
+                (String) parsedArguments.get(1),
+                (String) parsedArguments.get(2),
+                parsedArguments.size() == 4
+                    ? (CreateCommandOptions) parsedArguments.get(3)
+                    : CreateCommandOptions.defaults()
+            );
+            return com.mojang.brigadier.Command.SINGLE_SUCCESS;
+        }
+        commandHandler.execute(sender, route.arguments(parsedArguments.stream().map(String.class::cast).toList()));
         return com.mojang.brigadier.Command.SINGLE_SUCCESS;
     }
 

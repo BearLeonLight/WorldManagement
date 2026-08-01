@@ -33,7 +33,7 @@ public final class OwnershipCommandModule implements WorldManagementCommandModul
     private static final String OWNER_PERMISSION = "worldmanagement.command.owner";
     private static final String RANK_PERMISSION = "worldmanagement.command.rank";
     private static final String ACCESS_PERMISSION = "worldmanagement.command.access";
-    private static final String BYPASS_PERMISSION = "worldmanagement.bypass.protection";
+    private static final String ADMIN_PERMISSION = "worldmanagement.admin.ownership.manage";
 
     private final WorldManagementService service;
     private final WorldNameValidator nameValidator;
@@ -102,7 +102,11 @@ public final class OwnershipCommandModule implements WorldManagementCommandModul
     }
 
     private boolean owner(final CommandSender sender, final String[] arguments) {
-        if (!sender.hasPermission(OWNER_PERMISSION) || (arguments.length != 3 && arguments.length != 4)) {
+        if (!sender.hasPermission(OWNER_PERMISSION) || !sender.hasPermission(ADMIN_PERMISSION)) {
+            send(sender, "ownership.owner.admin-required");
+            return true;
+        }
+        if (arguments.length != 3 && arguments.length != 4) {
             send(sender, "ownership.owner.usage");
             return true;
         }
@@ -209,7 +213,7 @@ public final class OwnershipCommandModule implements WorldManagementCommandModul
     private boolean canManage(final CommandSender sender, final String worldName) {
         final WorldMetadata metadata = service.managedWorld(worldName).orElse(null);
         if (metadata == null) { send(sender, "ownership.world-not-managed"); return false; }
-        if (sender.hasPermission(BYPASS_PERMISSION)) return true;
+        if (sender.hasPermission(ADMIN_PERMISSION)) return true;
         if (sender instanceof Player player && metadata.owner().equals(player.getUniqueId().toString())) return true;
         send(sender, "ownership.not-manager");
         return false;

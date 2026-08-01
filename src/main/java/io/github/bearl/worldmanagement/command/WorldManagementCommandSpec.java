@@ -92,16 +92,24 @@ final class WorldManagementCommandSpec {
     }
 
     private List<CommandNodeSpec> createTree() {
-        final CommandNodeSpec seed = argument("create.seed", "seed", CommandArgumentKind.WORD, List.of())
-            .executes(route("create"), List.of("world", "environment", "world-type", "seed"));
-        final CommandNodeSpec worldType = argument("create.world-type", "world-type", CommandArgumentKind.WORD, List.of(seed))
+        final CommandNodeSpec options = CommandNodeSpec.typedArgument(
+            "create.options",
+            "options",
+            new CreateCommandOptionsArgument(suggestions::generatorPlugins),
+            "[--seed <seed>] [--generator <plugin[:id]>]",
+            List.of()
+        ).executesTyped(route("create"), List.of(
+            new CommandArgumentBinding("world", String.class),
+            new CommandArgumentBinding("environment", String.class),
+            new CommandArgumentBinding("world-type", String.class),
+            new CommandArgumentBinding("options", CreateCommandOptions.class)
+        ));
+        final CommandNodeSpec worldType = argument("create.world-type", "world-type", CommandArgumentKind.WORD, List.of(options))
             .suggests(staticSuggestions(WORLD_TYPES))
             .executes(route("create"), List.of("world", "environment", "world-type"));
         final CommandNodeSpec environment = argument("create.environment", "environment", CommandArgumentKind.WORD, List.of(worldType))
-            .suggests(staticSuggestions(ENVIRONMENTS))
-            .executes(route("create"), List.of("world", "environment"));
-        return List.of(argument("create.world", "world", CommandArgumentKind.WORD, List.of(environment))
-            .executes(route("create"), List.of("world")));
+            .suggests(staticSuggestions(ENVIRONMENTS));
+        return List.of(argument("create.world", "world", CommandArgumentKind.WORD, List.of(environment)));
     }
 
     private CommandNodeSpec deleteTree() {
@@ -235,17 +243,20 @@ final class WorldManagementCommandSpec {
             )),
             literal(id + ".set", "set", access(ModuleId.WARP, WARP_PERMISSION), List.of(
                 words(id + ".set", routeWith(route, "set"), List.of("world", "name", "visibility"),
-                    List.of(manageableWorlds(), noSuggestions(), staticSuggestions(List.of("PUBLIC", "PRIVATE"))))
+                    List.of(manageableWorlds(CommandAuthorizationSnapshot.ManagementArea.WARP), noSuggestions(),
+                        staticSuggestions(List.of("PUBLIC", "PRIVATE"))))
             )),
             literal(id + ".delete", "delete", access(ModuleId.WARP, WARP_PERMISSION), List.of(
-                words(id + ".delete", routeWith(route, "delete"), List.of("world", "name"), List.of(manageableWorlds(), worldWarps()))
+                words(id + ".delete", routeWith(route, "delete"), List.of("world", "name"),
+                    List.of(manageableWorlds(CommandAuthorizationSnapshot.ManagementArea.WARP), worldWarps()))
             )),
             literal(id + ".tp", "tp", access(ModuleId.WARP, WARP_PERMISSION), List.of(
                 words(id + ".tp", routeWith(route, "tp"), List.of("world", "name"), List.of(managedWorlds(), visibleWarps()))
             )),
             literal(id + ".trust", "trust", access(ModuleId.WARP, TRUST_PERMISSION), List.of(
                 words(id + ".trust", routeWith(route, "trust"), List.of("world", "warp", "operation", "player"),
-                    List.of(manageableWorlds(), worldWarps(), staticSuggestions(List.of("add", "remove")), onlinePlayers()))
+                    List.of(manageableWorlds(CommandAuthorizationSnapshot.ManagementArea.WARP), worldWarps(),
+                        staticSuggestions(List.of("add", "remove")), onlinePlayers()))
             ))
         ));
     }
@@ -255,10 +266,11 @@ final class WorldManagementCommandSpec {
             literal(id + ".owner", "owner", access(ModuleId.OWNERSHIP, OWNER_PERMISSION), List.of(
                 literal(id + ".owner.set", "set", inherit(), List.of(
                     words(id + ".owner.set", routeWith(route, "owner", "set"), List.of("world", "player"),
-                        List.of(managedWorlds(), onlinePlayers()))
+                        List.of(administrativeWorlds(CommandAuthorizationSnapshot.ManagementArea.OWNERSHIP), onlinePlayers()))
                 )),
                 literal(id + ".owner.remove", "remove", inherit(), List.of(
-                    words(id + ".owner.remove", routeWith(route, "owner", "remove"), List.of("world"), List.of(managedWorlds()))
+                    words(id + ".owner.remove", routeWith(route, "owner", "remove"), List.of("world"),
+                        List.of(administrativeWorlds(CommandAuthorizationSnapshot.ManagementArea.OWNERSHIP)))
                 ))
             )),
             rankTree(id, route),
@@ -270,26 +282,28 @@ final class WorldManagementCommandSpec {
         return literal(id + ".rank", "rank", access(ModuleId.OWNERSHIP, RANK_PERMISSION), List.of(
             literal(id + ".rank.create", "create", inherit(), List.of(
                 words(id + ".rank.create", routeWith(route, "rank", "create"), List.of("world", "rank"),
-                    List.of(manageableWorlds(), noSuggestions()))
+                    List.of(manageableWorlds(CommandAuthorizationSnapshot.ManagementArea.OWNERSHIP), noSuggestions()))
             )),
             literal(id + ".rank.delete", "delete", inherit(), List.of(
                 words(id + ".rank.delete", routeWith(route, "rank", "delete"), List.of("world", "rank"),
-                    List.of(manageableWorlds(), rankIds()))
+                    List.of(manageableWorlds(CommandAuthorizationSnapshot.ManagementArea.OWNERSHIP), rankIds()))
             )),
             literal(id + ".rank.set", "set", inherit(), List.of(
                 words(id + ".rank.set", routeWith(route, "rank", "set"), List.of("world", "player", "rank"),
-                    List.of(manageableWorlds(), onlinePlayers(), rankIds()))
+                    List.of(manageableWorlds(CommandAuthorizationSnapshot.ManagementArea.OWNERSHIP), onlinePlayers(), rankIds()))
             )),
             literal(id + ".rank.remove", "remove", inherit(), List.of(
                 words(id + ".rank.remove", routeWith(route, "rank", "remove"), List.of("world", "player"),
-                    List.of(manageableWorlds(), onlinePlayers()))
+                    List.of(manageableWorlds(CommandAuthorizationSnapshot.ManagementArea.OWNERSHIP), onlinePlayers()))
             )),
             literal(id + ".rank.perm", "perm", inherit(), List.of(
                 words(id + ".rank.perm", routeWith(route, "rank", "perm"), List.of("world", "rank", "operation", "permission"),
-                    List.of(manageableWorlds(), rankIds(), staticSuggestions(List.of("add", "remove")), noSuggestions()))
+                    List.of(manageableWorlds(CommandAuthorizationSnapshot.ManagementArea.OWNERSHIP), rankIds(),
+                        staticSuggestions(List.of("add", "remove")), noSuggestions()))
             )),
             literal(id + ".rank.toggle", "toggle", inherit(), List.of(
-                words(id + ".rank.toggle", routeWith(route, "rank", "toggle"), List.of("world"), List.of(manageableWorlds()))
+                words(id + ".rank.toggle", routeWith(route, "rank", "toggle"), List.of("world"),
+                    List.of(manageableWorlds(CommandAuthorizationSnapshot.ManagementArea.OWNERSHIP)))
             ))
         ));
     }
@@ -297,7 +311,8 @@ final class WorldManagementCommandSpec {
     private CommandNodeSpec accessTree(final String id, final CommandRoute route) {
         return literal(id + ".access", "access", access(ModuleId.OWNERSHIP, ACCESS_PERMISSION), List.of(
             words(id + ".access", routeWith(route, "access"), List.of("world", "operation", "value"),
-                List.of(manageableWorlds(), staticSuggestions(List.of("mode", "add", "remove")), accessValues()))
+                List.of(manageableWorlds(CommandAuthorizationSnapshot.ManagementArea.OWNERSHIP),
+                    staticSuggestions(List.of("mode", "add", "remove")), accessValues()))
         ));
     }
 
@@ -394,8 +409,20 @@ final class WorldManagementCommandSpec {
         return suggestions.provider(SuggestionCatalog.DETACHED_WORLD, (context, catalog) -> catalog.detachedWorlds());
     }
 
-    private com.mojang.brigadier.suggestion.SuggestionProvider<CommandSourceStack> manageableWorlds() {
-        return suggestions.provider(SuggestionCatalog.MANAGEABLE_WORLD, (context, catalog) -> catalog.manageableWorlds());
+    private com.mojang.brigadier.suggestion.SuggestionProvider<CommandSourceStack> manageableWorlds(
+        final CommandAuthorizationSnapshot.ManagementArea area
+    ) {
+        return suggestions.provider(SuggestionCatalog.MANAGEABLE_WORLD, (context, catalog) ->
+            catalog.manageableWorlds(context.getSource(), area)
+        );
+    }
+
+    private com.mojang.brigadier.suggestion.SuggestionProvider<CommandSourceStack> administrativeWorlds(
+        final CommandAuthorizationSnapshot.ManagementArea area
+    ) {
+        return suggestions.provider(SuggestionCatalog.MANAGEABLE_WORLD, (context, catalog) ->
+            catalog.administrativeWorlds(context.getSource(), area)
+        );
     }
 
     private com.mojang.brigadier.suggestion.SuggestionProvider<CommandSourceStack> identityWorlds() {
@@ -417,7 +444,11 @@ final class WorldManagementCommandSpec {
 
     private com.mojang.brigadier.suggestion.SuggestionProvider<CommandSourceStack> worldWarps() {
         return suggestions.provider(SuggestionCatalog.WORLD_WARP, (context, catalog) ->
-            catalog.warpNames(context.getArgument("world", String.class))
+            catalog.warpNames(
+                context.getSource(),
+                context.getArgument("world", String.class),
+                CommandAuthorizationSnapshot.ManagementArea.WARP
+            )
         );
     }
 
@@ -433,7 +464,7 @@ final class WorldManagementCommandSpec {
 
     private com.mojang.brigadier.suggestion.SuggestionProvider<CommandSourceStack> rankIds() {
         return suggestions.provider(SuggestionCatalog.RANK_ID, (context, catalog) ->
-            catalog.rankIds(context.getArgument("world", String.class))
+            catalog.rankIds(context.getSource(), context.getArgument("world", String.class))
         );
     }
 

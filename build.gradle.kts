@@ -254,6 +254,21 @@ tasks {
         dependsOn(shadowJar)
     }
 
+    register<Delete>("cleanE2eDependencies") {
+        group = "build setup"
+        description = "Removes the reproducible Node dependencies used by console and player E2E tests."
+        delete(
+            layout.projectDirectory.dir("e2e/console/node_modules"),
+            layout.projectDirectory.dir("e2e/player/node_modules")
+        )
+    }
+
+    register<Delete>("cleanWorldManagementE2eCache") {
+        group = "build setup"
+        description = "Removes WorldManagement's checksum-verified Paper, Via, and LuckPerms E2E downloads."
+        delete(File(gradle.gradleUserHomeDir, "caches/worldmanagement"))
+    }
+
     register("paperJarSmokeTest") {
         group = "verification"
         description = "Starts an isolated Paper server with the shaded plugin JAR and verifies WorldManagement loads its metadata."

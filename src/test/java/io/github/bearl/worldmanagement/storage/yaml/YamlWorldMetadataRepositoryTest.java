@@ -108,16 +108,16 @@ final class YamlWorldMetadataRepositoryTest {
     }
 
     @Test
-    void refusesSchemaTwoWithoutModifyingOrQuarantiningIt() throws Exception {
+    void refusesSchemaThreeWithoutModifyingOrQuarantiningIt() throws Exception {
         final Path worlds = temporaryDirectory.resolve("worlds");
         Files.createDirectories(worlds);
         final Path metadataFile = worlds.resolve("creative.yml");
-        Files.writeString(metadataFile, "schema-version: 2\nworld-id: creative\n");
+        Files.writeString(metadataFile, "schema-version: 3\nworld-id: creative\n");
 
         final YamlWorldMetadataRepository repository = new YamlWorldMetadataRepository(worlds);
 
         assertThrows(UnsupportedStorageSchemaException.class, repository::loadAll);
-        assertEquals("schema-version: 2\nworld-id: creative\n", Files.readString(metadataFile));
+        assertEquals("schema-version: 3\nworld-id: creative\n", Files.readString(metadataFile));
         assertFalse(Files.exists(worlds.resolve("backup")));
         assertFalse(Files.exists(worlds.resolve("quarantine")));
     }

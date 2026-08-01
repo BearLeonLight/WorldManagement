@@ -2,8 +2,11 @@ const test = require('node:test')
 const assert = require('node:assert/strict')
 const { assertCommandMatchesPath } = require('./runtime-coverage.cjs')
 
-test('accepts canonical commands with argument placeholders', () => {
-  assert.doesNotThrow(() => assertCommandMatchesPath('/wm create creative NORMAL FLAT 42', 'wm create <world> <environment> <world-type> <seed>'))
+test('accepts canonical commands with terminal typed options', () => {
+  assert.doesNotThrow(() => assertCommandMatchesPath(
+    '/wm create creative NORMAL FLAT --seed 42 --generator Terra:normal',
+    'wm create <world> <environment> <world-type> <options>'
+  ))
 })
 
 test('normalizes root aliases', () => {

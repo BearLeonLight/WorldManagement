@@ -137,12 +137,15 @@ public final class WorldManagementService {
             return WorldRuntimeResolution.unmanaged();
         }
         final WorldMetadata candidate = byId != null ? byId : byKey != null ? byKey : byUuid;
+        final LifecycleCapability effectiveCapability = candidate.generator().isPresent()
+            ? LifecycleCapability.MANAGED
+            : capability;
         return candidate.managementState() == WorldManagementState.ACTIVE
             && candidate == byId
             && candidate == byKey
             && candidate == byUuid
             && candidate.identityState() == IdentityVerificationState.VERIFIED
-            && candidate.lifecycleCapability() == capability
+            && candidate.lifecycleCapability() == effectiveCapability
             && candidate.identity().equals(observed)
                 ? WorldRuntimeResolution.verified(candidate)
                 : WorldRuntimeResolution.isolated(candidate);
@@ -161,12 +164,17 @@ public final class WorldManagementService {
         final LifecycleCapability observedCapability
     ) {
         final WorldIdentitySnapshot observed = Objects.requireNonNull(observedIdentity, "observedIdentity");
-        final LifecycleCapability capability = Objects.requireNonNull(observedCapability, "observedCapability");
+        final LifecycleCapability observedRuntimeCapability = Objects.requireNonNull(
+            observedCapability, "observedCapability"
+        );
         final String worldName = observed.keyValue();
         final WorldMetadata current = registry.find(worldName).orElse(null);
         if (current == null) {
             return CompletableFuture.completedFuture(UpdateResult.notManaged());
         }
+        final LifecycleCapability capability = current.generator().isPresent()
+            ? LifecycleCapability.MANAGED
+            : observedRuntimeCapability;
         final WorldMetadata classified = current.withObservedIdentity(observed, capability);
         if (classified == current) {
             return CompletableFuture.completedFuture(UpdateResult.updated(current));
@@ -295,12 +303,26 @@ public final class WorldManagementService {
         final boolean rankSystemEnabled,
         final AuditEvent auditEvent
     ) {
+        return adopt(
+            identity, lifecycleCapability, requestedWorldType, Optional.empty(), rankSystemEnabled, auditEvent
+        );
+    }
+
+    public CompletableFuture<AdoptionResult> adopt(
+        final WorldIdentitySnapshot identity,
+        final LifecycleCapability lifecycleCapability,
+        final Optional<RequestedWorldType> requestedWorldType,
+        final Optional<WorldGeneratorReference> generator,
+        final boolean rankSystemEnabled,
+        final AuditEvent auditEvent
+    ) {
         final WorldIdentitySnapshot requiredIdentity = Objects.requireNonNull(identity, "identity");
         return adopt(WorldMetadata.createDefault(
             requiredIdentity.keyValue(),
             requiredIdentity,
             Objects.requireNonNull(lifecycleCapability, "lifecycleCapability"),
             Objects.requireNonNull(requestedWorldType, "requestedWorldType"),
+            Objects.requireNonNull(generator, "generator"),
             rankSystemEnabled
         ), auditEvent);
     }

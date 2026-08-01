@@ -89,7 +89,7 @@ final class JdbcWorldMetadataRepositoryTest {
         final String url = sqliteUrl("future-payload.db");
         final YamlWorldMetadataCodec codec = new YamlWorldMetadataCodec();
         try (JdbcWorldMetadataRepository repository = new JdbcWorldMetadataRepository(url, null, null, codec)) {
-            final String futurePayload = "schema-version: 2\nworld-id: creative\n";
+            final String futurePayload = "schema-version: 3\nworld-id: creative\n";
             repository.inTransaction(connection -> {
                 try (PreparedStatement statement = connection.prepareStatement(
                     "INSERT INTO worldmanagement_metadata (world_name, version, payload) VALUES (?, ?, ?)")) {

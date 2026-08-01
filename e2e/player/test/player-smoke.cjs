@@ -288,10 +288,10 @@ async function runPlayerFlow (attempt, clientVersion) {
   attempt.clientVersion = clientVersion
   try {
     await consoleCommand(attempt, `wm adopt ${OVERWORLD_ID}`, `世界 ${OVERWORLD_ID} 已加入管理`, 'adopt player fixture world', 'wm adopt <world>')
-    await consoleCommand(attempt, 'wm create teleporttarget', '世界 teleporttarget 已建立並加入管理', 'create teleport fixture', 'wm create <world>')
-    await consoleCommand(attempt, 'wm create relocation', '世界 relocation 已建立並加入管理', 'create unload fixture', 'wm create <world>')
-    await consoleCommand(attempt, 'wm create deletiontarget', '世界 deletiontarget 已建立並加入管理', 'create delete fixture', 'wm create <world>')
-    await consoleCommand(attempt, `wm create ${IDENTITY_WORLD_ID}`, `世界 ${IDENTITY_WORLD_ID} 已建立並加入管理`, 'create identity fixture', 'wm create <world>')
+    await consoleCommand(attempt, 'wm create teleporttarget NORMAL NORMAL', '世界 teleporttarget 已建立並加入管理', 'create teleport fixture', 'wm create <world> <environment> <world-type>')
+    await consoleCommand(attempt, 'wm create relocation NORMAL NORMAL', '世界 relocation 已建立並加入管理', 'create unload fixture', 'wm create <world> <environment> <world-type>')
+    await consoleCommand(attempt, 'wm create deletiontarget NORMAL NORMAL', '世界 deletiontarget 已建立並加入管理', 'create delete fixture', 'wm create <world> <environment> <world-type>')
+    await consoleCommand(attempt, `wm create ${IDENTITY_WORLD_ID} NORMAL NORMAL`, `世界 ${IDENTITY_WORLD_ID} 已建立並加入管理`, 'create identity fixture', 'wm create <world> <environment> <world-type>')
     await consoleCommand(attempt, 'wm ownership access teleporttarget mode WHITELIST', '世界存取設定已更新', 'restrict teleport fixture', 'wm ownership access <world> <operation> <value>')
     bot = await connectPlayer(attempt, clientVersion)
     phase = 'post-spawn'

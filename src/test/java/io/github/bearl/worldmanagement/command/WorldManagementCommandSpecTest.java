@@ -68,6 +68,22 @@ final class WorldManagementCommandSpecTest {
     }
 
     @Test
+    void productionCreateUsageRequiresEnvironmentAndTypeBeforeOptionalFlags() {
+        final WorldManagementCommandSpec specification = new WorldManagementCommandSpec(
+            new SuggestionCatalog(new OnlinePlayerSnapshot())
+        );
+        final CommandNodeSpec create = specification.root().children().stream()
+            .filter(node -> node.id().equals("create"))
+            .findFirst()
+            .orElseThrow();
+
+        assertEquals(List.of(
+            "/wm create <world> <environment> <world-type>",
+            "/wm create <world> <environment> <world-type> [--seed <seed>] [--generator <plugin[:id]>]"
+        ), create.usageLines("wm"));
+    }
+
+    @Test
     void everyReachableLiteralHelpTopicHasABundledDescription() throws Exception {
         final WorldManagementCommandSpec specification = new WorldManagementCommandSpec(
             new SuggestionCatalog(new OnlinePlayerSnapshot())

@@ -5,6 +5,7 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import com.mojang.brigadier.CommandDispatcher;
 import com.mojang.brigadier.context.CommandContext;
+import com.mojang.brigadier.arguments.IntegerArgumentType;
 import io.github.bearl.worldmanagement.module.ModuleId;
 import io.papermc.paper.command.brigadier.CommandSourceStack;
 import java.lang.reflect.Proxy;
@@ -74,6 +75,36 @@ final class BrigadierCommandSpecCompilerTest {
         dispatcher.execute("wm help ownership rank", source(true));
         assertEquals(new CommandRoute(List.of("help")), receivedExecution.get().route());
         assertEquals(List.of("ownership rank"), receivedArguments.get());
+    }
+
+    @Test
+    void extractsTypedArgumentsUsingTheExecutionBinding() throws Exception {
+        final CommandRoute route = new CommandRoute(List.of("typed"));
+        final CommandNodeSpec root = CommandNodeSpec.root(List.of(CommandNodeSpec.literal(
+            "typed",
+            "typed",
+            new CommandAccess(ModuleId.LIFECYCLE, List.of("worldmanagement.command.create")),
+            List.of(CommandNodeSpec.typedArgument(
+                "typed.value", "value", IntegerArgumentType.integer(), "<value>", List.of()
+            ).executesTyped(route, List.of(new CommandArgumentBinding("value", Integer.class))))
+        )));
+        final AtomicReference<Object> received = new AtomicReference<>();
+        final BrigadierCommandSpecCompiler compiler = new BrigadierCommandSpecCompiler(
+            new CommandAccessPolicy(),
+            (context, execution) -> {
+                received.set(context.getArgument(
+                    execution.arguments().getFirst().name(),
+                    execution.arguments().getFirst().type()
+                ));
+                return com.mojang.brigadier.Command.SINGLE_SUCCESS;
+            }
+        );
+        final CommandDispatcher<CommandSourceStack> dispatcher = new CommandDispatcher<>();
+        dispatcher.getRoot().addChild(compiler.compileRoot(root, "wm"));
+
+        dispatcher.execute("wm typed 42", source(true));
+
+        assertEquals(42, received.get());
     }
 
     private static List<String> compilerArguments(

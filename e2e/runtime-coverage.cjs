@@ -49,7 +49,7 @@ function assertCommandMatchesPath (input, commandPath) {
   const canonicalTokens = alias ? [...alias, ...inputTokens.slice(1)] : inputTokens
   const pathTokens = commandPath.split(/\s+/)
   const greedyIndexes = pathTokens
-    .map((token, index) => token.startsWith('<') && token.endsWith('...>') ? index : -1)
+    .map((token, index) => token.startsWith('<') && (token.endsWith('...>') || token === '<options>') ? index : -1)
     .filter(index => index >= 0)
   if (greedyIndexes.some(index => index !== pathTokens.length - 1) || greedyIndexes.length > 1) {
     throw new Error(`Command path '${commandPath}' may declare at most one terminal greedy placeholder.`)

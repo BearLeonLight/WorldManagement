@@ -6,12 +6,14 @@ import java.util.Objects;
 public final class WorldManagementCommandComposition {
 
     private final OnlinePlayerSnapshot onlinePlayers;
+    private final CommandAuthorizationSnapshot authorizations;
     private final SuggestionCatalog suggestions;
     private final BrigadierWorldManagementCommand command;
 
     public WorldManagementCommandComposition() {
         this.onlinePlayers = new OnlinePlayerSnapshot();
-        this.suggestions = new SuggestionCatalog(onlinePlayers);
+        this.authorizations = new CommandAuthorizationSnapshot();
+        this.suggestions = new SuggestionCatalog(onlinePlayers, authorizations);
         this.command = new BrigadierWorldManagementCommand(suggestions);
     }
 
@@ -21,6 +23,10 @@ public final class WorldManagementCommandComposition {
 
     public SuggestionCatalog suggestions() {
         return suggestions;
+    }
+
+    public CommandAuthorizationSnapshot authorizations() {
+        return authorizations;
     }
 
     public BrigadierWorldManagementCommand command() {

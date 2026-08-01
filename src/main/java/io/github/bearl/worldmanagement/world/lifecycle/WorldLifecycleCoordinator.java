@@ -85,7 +85,13 @@ public final class WorldLifecycleCoordinator {
         final WorldRuntimeGateway.WorldType type,
         final Long seed
     ) {
-        return create(worldName, environment, type, seed, null);
+        return create(new WorldCreationRequest(
+            worldName,
+            environment,
+            type,
+            seed == null ? java.util.OptionalLong.empty() : java.util.OptionalLong.of(seed),
+            Optional.empty()
+        ), null);
     }
 
     public CompletableFuture<CreateResult> create(
@@ -95,6 +101,18 @@ public final class WorldLifecycleCoordinator {
         final Long seed,
         final AuditEvent event
     ) {
+        return create(new WorldCreationRequest(
+            worldName,
+            environment,
+            type,
+            seed == null ? java.util.OptionalLong.empty() : java.util.OptionalLong.of(seed),
+            Optional.empty()
+        ), event);
+    }
+
+    public CompletableFuture<CreateResult> create(final WorldCreationRequest request, final AuditEvent event) {
+        final WorldCreationRequest requiredRequest = Objects.requireNonNull(request, "request");
+        final String worldName = requiredRequest.worldName();
         return withOperation(worldName, WorldOperationState.CREATING, CreateResult.operationInProgress(), () -> continueOnGlobal(() -> {
             if (gateway.findWorldByPaperKey("minecraft:" + worldName).isPresent()
                 || metadataService.managedWorld(worldName).isPresent()) {
@@ -109,7 +127,7 @@ public final class WorldLifecycleCoordinator {
                     }
                     final WorldRuntimeGateway.LifecycleWorld world;
                     try {
-                        world = gateway.create(worldName, environment, type, seed);
+                        world = gateway.create(requiredRequest);
                     } catch (final RuntimeException failure) {
                         return compensateFailedCreate(null, creationClaim.orElseThrow(), failure);
                     }
@@ -120,7 +138,8 @@ public final class WorldLifecycleCoordinator {
                     }
                     return metadataService.adopt(
                         world.identity(), world.lifecycleCapability(),
-                        Optional.of(RequestedWorldType.valueOf(type.name())),
+                        Optional.of(RequestedWorldType.valueOf(requiredRequest.type().name())),
+                        requiredRequest.generator(),
                         defaultRankSystemEnabled, event
                     )
                         .thenCompose(adoption -> switch (adoption.status()) {
@@ -263,7 +282,11 @@ public final class WorldLifecycleCoordinator {
                 }
                 return ioExecutor.execute(() -> storageGateway.validateLoadClaim(claim))
                     .thenCompose(unused -> continueOnNonTickingGlobal(() -> {
-                            final WorldRuntimeGateway.LoadResult loadResult = gateway.load(claim);
+                            final WorldRuntimeGateway.LoadResult loadResult = gateway.load(
+                                claim,
+                                WorldRuntimeGateway.WorldEnvironment.valueOf(current.get().identity().environment().name()),
+                                current.get().generator()
+                            );
                             if (loadResult.world().isEmpty()) {
                                 return CompletableFuture.completedFuture(LifecycleResult.failed());
                             }
@@ -625,7 +648,11 @@ public final class WorldLifecycleCoordinator {
             final WorldStorageGateway.LoadClaim claim = loadClaim.orElseThrow();
             return ioExecutor.execute(() -> storageGateway.validateLoadClaim(claim))
                 .thenCompose(unused -> continueOnNonTickingGlobal(() -> {
-                    final WorldRuntimeGateway.LoadResult loadResult = gateway.load(claim);
+                    final WorldRuntimeGateway.LoadResult loadResult = gateway.load(
+                        claim,
+                        WorldRuntimeGateway.WorldEnvironment.valueOf(metadata.identity().environment().name()),
+                        metadata.generator()
+                    );
                     if (loadResult.world().isEmpty()) {
                         return CompletableFuture.failedFuture(new IllegalStateException(
                             "Could not reload world after metadata update failed: " + source.name()

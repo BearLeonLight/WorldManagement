@@ -125,7 +125,7 @@ command:
     adopt: "<prefix><red>你沒有接管世界的權限。</red>"
     list: "<prefix><red>你沒有列出受管世界的權限。</red>"
   create:
-    usage: "<gray>用法：</gray><white>/wm create <world> [NORMAL|NETHER|THE_END] [NORMAL|FLAT|AMPLIFIED|LARGE_BIOMES] [seed]</white>"
+    usage: "<gray>用法：</gray><white>/wm create <world> <NORMAL|NETHER|THE_END> <NORMAL|FLAT|AMPLIFIED|LARGE_BIOMES> [--seed <seed>] [--generator <plugin[:id]>]</white>"
     started: "<prefix><yellow>正在建立世界 <white><world></white>...</yellow>"
     invalid: "<prefix><red>世界建立參數無效。</red>"
     success: "<prefix><green>世界 <white><world></white> 已建立並加入管理。</green>"
@@ -209,9 +209,11 @@ command:
     already-managed: "<prefix><yellow>世界 <white><world></white> 已在管理中。</yellow>"
   list:
     empty: "<prefix><gray>目前沒有受 WorldManagement 管理的世界。</gray>"
-    result: "<aqua>受管世界：</aqua><white><worlds></white>"
+    result: "<aqua>受管世界：</aqua>"
     detached-empty: "<prefix><gray>目前沒有已停止管理的世界。</gray>"
-    detached-result: "<aqua>已停止管理世界：</aqua><white><worlds></white>"
+    detached-result: "<aqua>已停止管理世界：</aqua>"
+    entry: "<name><gray> - </gray><type>"
+    world-id-hover: "<gray>世界 ID：</gray><white><world></white>"
   tp:
     usage: "<gray>用法：</gray><white>/wm tp <self|player <online-player>|--any> <world> [x y z]</white>"
     player-only: "<prefix><red>只有玩家能傳送自己；請用 player 指定線上玩家。</red>"
@@ -252,6 +254,7 @@ warp:
 ownership:
   owner:
     usage: "<gray>用法：</gray><white>/wm ownership owner <set|remove> <world> [player-name-or-uuid]</white>"
+    admin-required: "<prefix><red>只有 WorldManagement 管理員可以設定或移除世界擁有者。</red>"
     success: "<prefix><green>世界擁有者已更新。</green>"
     failure: "<prefix><red>無法更新世界擁有者。</red>"
     invalid: "<prefix><red>擁有者操作或線上玩家名稱／UUID 無效。</red>"

@@ -20,14 +20,54 @@ import java.time.Duration;
 import java.util.List;
 import java.util.Set;
 import java.util.UUID;
+import io.papermc.paper.command.brigadier.CommandSourceStack;
 import org.bukkit.entity.Player;
 import org.junit.jupiter.api.Test;
 
 final class SuggestionCatalogTest {
 
     @Test
-    void manageableWorldsStayEmptyWithoutAnAuthorizationSnapshot() {
-        assertEquals(List.of(), new SuggestionCatalog(new OnlinePlayerSnapshot()).manageableWorlds());
+    void manageableWorldsFollowImmutableOwnershipAuthorizationScope() {
+        final PluginIoExecutor executor = new PluginIoExecutor("SuggestionCatalogAuthorizationTest");
+        try {
+            final UUID ownerId = UUID.fromString("11111111-1111-1111-1111-111111111111");
+            final UUID otherOwnerId = UUID.fromString("22222222-2222-2222-2222-222222222222");
+            final Player owner = player(ownerId, "Owner", Set.of());
+            final Player administrator = player(
+                UUID.fromString("33333333-3333-3333-3333-333333333333"),
+                "Administrator",
+                Set.of(CommandAuthorizationSnapshot.OWNERSHIP_ADMIN_PERMISSION)
+            );
+            final Player unknown = player(
+                UUID.fromString("44444444-4444-4444-4444-444444444444"),
+                "Unknown",
+                Set.of(CommandAuthorizationSnapshot.OWNERSHIP_ADMIN_PERMISSION)
+            );
+            final WorldManagementService metadata = new WorldManagementService(
+                executor, new InMemoryWorldMetadataRepository(), new WorldRegistry()
+            );
+            metadata.load().join();
+            metadata.adopt("creative", true).join();
+            metadata.adopt("survival", true).join();
+            metadata.update("creative", world -> world.withOwner(ownerId.toString())).join();
+            metadata.update("survival", world -> world.withOwner(otherOwnerId.toString())).join();
+            final CommandAuthorizationSnapshot authorizations = new CommandAuthorizationSnapshot();
+            authorizations.replace(List.of(owner, administrator));
+            final SuggestionCatalog catalog = new SuggestionCatalog(new OnlinePlayerSnapshot(), authorizations);
+            catalog.initialize(metadata);
+
+            assertEquals(List.of("creative"), catalog.manageableWorlds(
+                source(owner), CommandAuthorizationSnapshot.ManagementArea.OWNERSHIP
+            ));
+            assertEquals(List.of("creative", "survival"), catalog.manageableWorlds(
+                source(administrator), CommandAuthorizationSnapshot.ManagementArea.OWNERSHIP
+            ));
+            assertEquals(List.of(), catalog.manageableWorlds(
+                source(unknown), CommandAuthorizationSnapshot.ManagementArea.OWNERSHIP
+            ));
+        } finally {
+            executor.shutdown(Duration.ofSeconds(1));
+        }
     }
 
     @Test
@@ -127,14 +167,31 @@ final class SuggestionCatalogTest {
     }
 
     private static Player player(final UUID playerId, final String name) {
+        return player(playerId, name, Set.of());
+    }
+
+    private static Player player(final UUID playerId, final String name, final Set<String> permissions) {
         return (Player) Proxy.newProxyInstance(
             Player.class.getClassLoader(),
             new Class<?>[] {Player.class},
             (proxy, method, arguments) -> switch (method.getName()) {
                 case "getUniqueId" -> playerId;
                 case "getName" -> name;
+                case "hasPermission" -> permissions.contains(arguments[0]);
+                case "equals" -> proxy == arguments[0];
+                case "hashCode" -> System.identityHashCode(proxy);
                 default -> defaultValue(method.getReturnType());
             }
+        );
+    }
+
+    private static CommandSourceStack source(final Player player) {
+        return (CommandSourceStack) Proxy.newProxyInstance(
+            CommandSourceStack.class.getClassLoader(),
+            new Class<?>[] {CommandSourceStack.class},
+            (proxy, method, arguments) -> method.getName().equals("getSender")
+                ? player
+                : defaultValue(method.getReturnType())
         );
     }
 

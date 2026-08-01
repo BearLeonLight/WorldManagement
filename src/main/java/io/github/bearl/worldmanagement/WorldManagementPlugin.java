@@ -19,6 +19,7 @@ import io.github.bearl.worldmanagement.config.DebugLevel;
 import io.github.bearl.worldmanagement.hook.LuckPermsHook;
 import io.github.bearl.worldmanagement.command.WorldManagementCommand;
 import io.github.bearl.worldmanagement.command.BrigadierWorldManagementCommand;
+import io.github.bearl.worldmanagement.command.CommandAuthorizationSnapshot;
 import io.github.bearl.worldmanagement.command.OnlinePlayerSnapshot;
 import io.github.bearl.worldmanagement.command.SuggestionCatalog;
 import io.github.bearl.worldmanagement.command.WorldManagementCommandComposition;
@@ -40,6 +41,7 @@ import io.github.bearl.worldmanagement.world.lifecycle.PaperWorldStorageGateway;
 import io.github.bearl.worldmanagement.world.lifecycle.WorldLifecycleReconciler;
 import io.github.bearl.worldmanagement.world.lifecycle.WorldIdentityAutoSynchronizer;
 import io.github.bearl.worldmanagement.world.lifecycle.WorldLifecycleListener;
+import io.github.bearl.worldmanagement.world.lifecycle.WorldGeneratorCatalog;
 import io.github.bearl.worldmanagement.world.PaperWorldTeleportGateway;
 import io.github.bearl.worldmanagement.world.lifecycle.WorldDirectoryRemover;
 import io.github.bearl.worldmanagement.world.lifecycle.WorldLifecycleCoordinator;
@@ -87,6 +89,7 @@ public final class WorldManagementPlugin extends JavaPlugin {
     private PaperWarpTeleportGateway warpTeleportGateway;
     private BrigadierWorldManagementCommand paperCommand;
     private OnlinePlayerSnapshot onlinePlayers;
+    private CommandAuthorizationSnapshot commandAuthorizations;
     private AuditService auditService;
     private CommandMessageSender messageSender;
     private ModuleManager moduleManager;
@@ -123,6 +126,9 @@ public final class WorldManagementPlugin extends JavaPlugin {
         this.onlinePlayers = commandComposition.onlinePlayers();
         this.onlinePlayers.replace(getServer().getOnlinePlayers());
         getServer().getPluginManager().registerEvents(onlinePlayers, this);
+        this.commandAuthorizations = commandComposition.authorizations();
+        getServer().getPluginManager().registerEvents(commandAuthorizations, this);
+        refreshCommandAuthorizations(threadDispatcher);
         final long storageStartedAt = startupDiagnostics.beginStage();
         consoleOutput.info(startupDiagnostics.headingComponent(startupDiagnostics.stageStarted("Loading configuration and storage")));
         ioExecutor.submit(() -> {
@@ -328,7 +334,16 @@ public final class WorldManagementPlugin extends JavaPlugin {
         if (!isEnabled()) {
             return;
         }
-        final PaperWorldRuntimeGateway runtimeGateway = new PaperWorldRuntimeGateway(this, loadedWorldCatalog);
+        final WorldGeneratorCatalog generatorCatalog = new WorldGeneratorCatalog(
+            getServer().getPluginManager(),
+            getLogger()::warning,
+            commandComposition.suggestions()::replaceGeneratorPlugins
+        );
+        generatorCatalog.refresh("worldmanagement-generator-probe");
+        getServer().getPluginManager().registerEvents(generatorCatalog, this);
+        final PaperWorldRuntimeGateway runtimeGateway = new PaperWorldRuntimeGateway(
+            this, loadedWorldCatalog, generatorCatalog
+        );
         final java.util.Optional<io.github.bearl.worldmanagement.world.VerifiedWorldRef> fallback;
         try {
             fallback = new LifecycleFallbackValidator().resolveUsable(
@@ -451,6 +466,7 @@ public final class WorldManagementPlugin extends JavaPlugin {
             configuration.auditPolicy(), auditBackend(configuration)
         )));
         consoleOutput.info(startupDiagnostics.detailComponent("Online player snapshot listener registered"));
+        consoleOutput.info(startupDiagnostics.detailComponent("Command authorization snapshot refresh scheduled"));
         if (moduleManager.enabled(io.github.bearl.worldmanagement.module.ModuleId.PROTECTION)) {
             getServer().getPluginManager().registerEvents(
                 new WorldProtectionListener(
@@ -477,8 +493,28 @@ public final class WorldManagementPlugin extends JavaPlugin {
         )));
     }
 
+    private void refreshCommandAuthorizations(final WorldThreadDispatcher threadDispatcher) {
+        final List<org.bukkit.entity.Player> players = List.copyOf(getServer().getOnlinePlayers());
+        final CommandAuthorizationSnapshot.Refresh refresh = commandAuthorizations.beginRefresh(players.size());
+        for (final org.bukkit.entity.Player player : players) {
+            threadDispatcher.executeFor(
+                player,
+                () -> refresh.capture(player),
+                refresh::skip
+            );
+        }
+        threadDispatcher.executeGlobalLater(
+            Duration.ofSeconds(1),
+            () -> refreshCommandAuthorizations(threadDispatcher),
+            () -> { }
+        );
+    }
+
     @Override
     public void onDisable() {
+        if (commandAuthorizations != null) {
+            commandAuthorizations.beginShutdown();
+        }
         teleportBypassTokens.clear();
         if (shutdownCoordinator == null) {
             return;

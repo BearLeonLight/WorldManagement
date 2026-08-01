@@ -12,6 +12,7 @@ import io.github.bearl.worldmanagement.storage.InMemoryWorldMetadataRepository;
 import io.github.bearl.worldmanagement.storage.StorageException;
 import io.github.bearl.worldmanagement.storage.WorldMetadataRepository;
 import io.github.bearl.worldmanagement.world.WorldMetadata;
+import io.github.bearl.worldmanagement.world.WorldGeneratorReference;
 import io.github.bearl.worldmanagement.world.WorldManagementService;
 import io.github.bearl.worldmanagement.world.WorldRegistry;
 import io.github.bearl.worldmanagement.world.WorldLoadState;
@@ -48,12 +49,14 @@ final class WorldLifecycleCoordinatorTest {
             gateway.nextCreateIdentity = observedIdentity;
             final WorldLifecycleCoordinator service = service(gateway, metadata, executor);
 
-            final WorldLifecycleCoordinator.CreateResult result = service.create(
+            final WorldCreationRequest request = new WorldCreationRequest(
                 "creative",
                 WorldRuntimeGateway.WorldEnvironment.NORMAL,
                 WorldRuntimeGateway.WorldType.NORMAL,
-                null
-            ).join();
+                java.util.OptionalLong.of(8675309L),
+                Optional.of(WorldGeneratorReference.parse("Terra:normal"))
+            );
+            final WorldLifecycleCoordinator.CreateResult result = service.create(request, null).join();
 
             assertEquals(WorldLifecycleCoordinator.CreateStatus.CREATED, result.status());
             final WorldMetadata created = metadata.managedWorld("creative").orElseThrow();
@@ -62,6 +65,8 @@ final class WorldLifecycleCoordinatorTest {
                 Optional.of(io.github.bearl.worldmanagement.world.RequestedWorldType.NORMAL),
                 created.requestedWorldType()
             );
+            assertEquals(request, gateway.lastCreateRequest);
+            assertEquals(request.generator(), created.generator());
         } finally {
             executor.shutdown(Duration.ofSeconds(1));
         }
@@ -427,15 +432,24 @@ final class WorldLifecycleCoordinatorTest {
             createPaperStorage(temporaryDirectory, "creative");
             final WorldManagementService metadata = new WorldManagementService(executor, new InMemoryWorldMetadataRepository(), new WorldRegistry());
             metadata.load().join();
-            metadata.adopt("creative", true).join();
+            final var netherIdentity = new io.github.bearl.worldmanagement.world.WorldIdentitySnapshot(
+                "minecraft:creative", UUID.fromString("aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa"),
+                io.github.bearl.worldmanagement.world.WorldEnvironment.NETHER, 0L, true
+            );
+            metadata.adopt(
+                netherIdentity, io.github.bearl.worldmanagement.world.LifecycleCapability.MANAGED,
+                Optional.empty(), true, null
+            ).join();
             metadata.adopt("lobby", true).join();
             final FakeGateway gateway = new FakeGateway();
+            gateway.nextClaimLoadIdentity = netherIdentity;
             gateway.loaded.add("lobby");
             final WorldLifecycleCoordinator service = service(
                 gateway, metadata, executor, Optional.of("lobby"), temporaryDirectory
             );
 
             assertEquals(WorldLifecycleCoordinator.LifecycleStatus.LOADED, service.loadAsync("creative").join().status());
+            assertEquals(WorldRuntimeGateway.WorldEnvironment.NETHER, gateway.lastManagedLoadEnvironment);
             assertEquals(WorldLifecycleCoordinator.LifecycleStatus.UNLOADED, service.unloadAsync("creative").join().status());
             assertEquals(WorldLifecycleCoordinator.LifecycleStatus.NOT_MANAGED, service.loadAsync("unknown").join().status());
         } finally {
@@ -2187,7 +2201,9 @@ final class WorldLifecycleCoordinatorTest {
         private io.github.bearl.worldmanagement.world.WorldIdentitySnapshot nextNameLoadIdentity;
         private io.github.bearl.worldmanagement.world.WorldIdentitySnapshot nextLookupIdentity;
         private io.github.bearl.worldmanagement.world.WorldIdentitySnapshot replacementAfterNameLoadIdentity;
+        private WorldCreationRequest lastCreateRequest;
         private WorldEnvironment lastUnmanagedLoadEnvironment;
+        private WorldEnvironment lastManagedLoadEnvironment;
         private final java.util.Map<String, io.github.bearl.worldmanagement.world.WorldIdentitySnapshot>
             lookupIdentities = new java.util.HashMap<>();
         private final java.util.Map<String, io.github.bearl.worldmanagement.world.WorldIdentitySnapshot>
@@ -2226,6 +2242,15 @@ final class WorldLifecycleCoordinatorTest {
             final LifecycleWorld created = lifecycleWorld(worldName, nextCreateIdentity);
             runtimeIdentities.put(worldName, created.identity());
             return created;
+        }
+
+        @Override
+        public LifecycleWorld create(final WorldCreationRequest request) {
+            lastCreateRequest = request;
+            return create(
+                request.worldName(), request.environment(), request.type(),
+                request.seed().isPresent() ? request.seed().getAsLong() : null
+            );
         }
 
         @Override
@@ -2268,6 +2293,16 @@ final class WorldLifecycleCoordinatorTest {
             return LoadResult.loaded(new LifecycleWorld(
                 identity, io.github.bearl.worldmanagement.world.LifecycleCapability.MANAGED
             ), newlyLoaded);
+        }
+
+        @Override
+        public LoadResult load(
+            final WorldStorageGateway.LoadClaim claim,
+            final WorldEnvironment environment,
+            final Optional<io.github.bearl.worldmanagement.world.WorldGeneratorReference> generator
+        ) {
+            lastManagedLoadEnvironment = environment;
+            return load(claim);
         }
 
         @Override

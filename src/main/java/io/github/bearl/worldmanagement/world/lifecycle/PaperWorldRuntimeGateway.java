@@ -19,12 +19,24 @@ public final class PaperWorldRuntimeGateway implements WorldRuntimeGateway {
 
     private final Plugin plugin;
     private final LoadedWorldCatalog loadedWorldCatalog;
+    private final WorldGeneratorCatalog generators;
     private final Set<CompletableFuture<Boolean>> pendingTeleports = ConcurrentHashMap.newKeySet();
     private final AtomicBoolean acceptingOperations = new AtomicBoolean(true);
 
     public PaperWorldRuntimeGateway(final Plugin plugin, final LoadedWorldCatalog loadedWorldCatalog) {
+        this(plugin, loadedWorldCatalog, new WorldGeneratorCatalog(
+            plugin.getServer().getPluginManager(), plugin.getLogger()::warning
+        ));
+    }
+
+    public PaperWorldRuntimeGateway(
+        final Plugin plugin,
+        final LoadedWorldCatalog loadedWorldCatalog,
+        final WorldGeneratorCatalog generators
+    ) {
         this.plugin = Objects.requireNonNull(plugin, "plugin");
         this.loadedWorldCatalog = Objects.requireNonNull(loadedWorldCatalog, "loadedWorldCatalog");
+        this.generators = Objects.requireNonNull(generators, "generators");
     }
 
     @Override
@@ -49,6 +61,30 @@ public final class PaperWorldRuntimeGateway implements WorldRuntimeGateway {
     }
 
     @Override
+    public LifecycleWorld create(final WorldCreationRequest request) {
+        final WorldCreationRequest required = Objects.requireNonNull(request, "request");
+        final WorldCreator creator = WorldCreator.ofKey(NamespacedKey.minecraft(required.worldName()))
+            .environment(toPaperEnvironment(required.environment()))
+            .type(toPaperType(required.type()));
+        if (required.seed().isPresent()) {
+            creator.seed(required.seed().getAsLong());
+        }
+        if (required.generator().isPresent()) {
+            final org.bukkit.generator.ChunkGenerator generator = generators.resolve(
+                required.worldName(), required.generator().orElseThrow()
+            ).orElse(null);
+            if (generator == null) {
+                return null;
+            }
+            creator.generator(generator);
+        }
+        final LifecycleWorld created = fromPaperWorld(Bukkit.createWorld(creator));
+        return created != null && required.generator().isPresent()
+            ? managed(created)
+            : created;
+    }
+
+    @Override
     public LoadResult loadUnmanaged(final String worldName, final WorldEnvironment environment) {
         final NamespacedKey key = NamespacedKey.minecraft(Objects.requireNonNull(worldName, "worldName"));
         final World existing = Bukkit.getWorld(key);
@@ -62,6 +98,23 @@ public final class PaperWorldRuntimeGateway implements WorldRuntimeGateway {
 
     @Override
     public LoadResult load(final WorldStorageGateway.LoadClaim claim) {
+        return load(claim, Optional.empty());
+    }
+
+    @Override
+    public LoadResult load(
+        final WorldStorageGateway.LoadClaim claim,
+        final Optional<io.github.bearl.worldmanagement.world.WorldGeneratorReference> generatorReference
+    ) {
+        return load(claim, WorldEnvironment.NORMAL, generatorReference);
+    }
+
+    @Override
+    public LoadResult load(
+        final WorldStorageGateway.LoadClaim claim,
+        final WorldEnvironment environment,
+        final Optional<io.github.bearl.worldmanagement.world.WorldGeneratorReference> generatorReference
+    ) {
         final WorldStorageGateway.LoadClaim requiredClaim = Objects.requireNonNull(claim, "claim");
         final NamespacedKey key = NamespacedKey.fromString(requiredClaim.world().paperKey());
         if (key == null) {
@@ -71,8 +124,23 @@ public final class PaperWorldRuntimeGateway implements WorldRuntimeGateway {
         if (existing != null) {
             return LoadResult.loaded(fromPaperWorld(existing), false);
         }
-        final World loaded = Bukkit.createWorld(WorldCreator.ofKey(key));
-        return loaded == null ? LoadResult.failed() : LoadResult.loaded(fromPaperWorld(loaded), true);
+        final WorldCreator creator = WorldCreator.ofKey(key)
+            .environment(toPaperEnvironment(Objects.requireNonNull(environment, "environment")));
+        if (Objects.requireNonNull(generatorReference, "generatorReference").isPresent()) {
+            final org.bukkit.generator.ChunkGenerator generator = generators.resolve(
+                requiredClaim.world().worldId(), generatorReference.orElseThrow()
+            ).orElse(null);
+            if (generator == null) {
+                return LoadResult.failed();
+            }
+            creator.generator(generator);
+        }
+        final World loaded = Bukkit.createWorld(creator);
+        if (loaded == null) {
+            return LoadResult.failed();
+        }
+        final LifecycleWorld captured = fromPaperWorld(loaded);
+        return LoadResult.loaded(generatorReference.isPresent() ? managed(captured) : captured, true);
     }
 
     @Override
@@ -203,6 +271,13 @@ public final class PaperWorldRuntimeGateway implements WorldRuntimeGateway {
         final PaperWorldIdentity identity = PaperWorldIdentity.capture(world);
         return new LifecycleWorld(
             identity.snapshot(), identity.lifecycleCapability(), identity.bukkitWorldName()
+        );
+    }
+
+    private static LifecycleWorld managed(final LifecycleWorld world) {
+        return new LifecycleWorld(
+            world.identity(), io.github.bearl.worldmanagement.world.LifecycleCapability.MANAGED,
+            world.bukkitWorldName()
         );
     }
 

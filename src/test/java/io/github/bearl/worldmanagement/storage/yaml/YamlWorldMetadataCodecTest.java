@@ -18,6 +18,7 @@ import io.github.bearl.worldmanagement.world.WorldEnvironment;
 import io.github.bearl.worldmanagement.world.WorldIdentitySnapshot;
 import io.github.bearl.worldmanagement.world.WorldLoadState;
 import io.github.bearl.worldmanagement.world.WorldManagementState;
+import io.github.bearl.worldmanagement.world.WorldGeneratorReference;
 import io.github.bearl.worldmanagement.world.WorldMetadata;
 import io.github.bearl.worldmanagement.world.WorldWarp;
 import java.util.Map;
@@ -32,7 +33,7 @@ final class YamlWorldMetadataCodecTest {
   private static final UUID PLAYER_UUID = UUID.fromString("22222222-2222-2222-2222-222222222222");
 
   @Test
-  void roundTripsTheCompleteSchemaOneAggregate() {
+  void roundTripsTheCompleteSchemaTwoAggregate() {
     final WorldIdentitySnapshot accepted = new WorldIdentitySnapshot(
       "minecraft:creative", WORLD_UUID, WorldEnvironment.NORMAL, 42L, true
     );
@@ -47,6 +48,7 @@ final class YamlWorldMetadataCodecTest {
       LifecycleCapability.MANAGED,
       Optional.of(pending),
       Optional.of(RequestedWorldType.FLAT),
+      Optional.of(WorldGeneratorReference.parse("Terra:normal")),
       WorldManagementState.ACTIVE,
       WorldLoadState.LOADED,
       PLAYER_UUID.toString(),
@@ -68,24 +70,47 @@ final class YamlWorldMetadataCodecTest {
 
     final String encoded = codec.encode(metadata);
 
-    assertTrue(encoded.contains("schema-version: 1"));
+    assertTrue(encoded.contains("schema-version: 2"));
     assertEquals(metadata, codec.decode(encoded));
   }
 
   @Test
-  void acceptsOnlyAnExplicitSchemaOneVersion() {
+  void decodesSchemaOneWithoutGeneratorProvenance() {
+    final YamlWorldMetadataCodec codec = new YamlWorldMetadataCodec();
+    final String schemaOne = codec.encode(WorldMetadata.createDefault("creative", true))
+      .replace("schema-version: 2", "schema-version: 1")
+      .replace("  generator:\n    present: false\n", "");
+
+    assertTrue(codec.decode(schemaOne).generator().isEmpty());
+  }
+
+  @Test
+  void roundTripsGeneratorPluginNamedNoneWithoutLosingProvenance() {
+    final WorldMetadata metadata = WorldMetadata.createDefault(
+      "creative",
+      new WorldIdentitySnapshot("minecraft:creative", WORLD_UUID, WorldEnvironment.NORMAL, 42L, true),
+      LifecycleCapability.MANAGED,
+      Optional.of(RequestedWorldType.NORMAL),
+      Optional.of(WorldGeneratorReference.parse("NONE")),
+      true
+    );
+    final YamlWorldMetadataCodec codec = new YamlWorldMetadataCodec();
+
+    assertEquals(metadata, codec.decode(codec.encode(metadata)));
+  }
+
+  @Test
+  void rejectsMissingAndUnsupportedSchemaVersions() {
     final YamlWorldMetadataCodec codec = new YamlWorldMetadataCodec();
     final String encoded = codec.encode(WorldMetadata.createDefault("creative", true));
 
     assertThrows(StorageException.class,
-      () -> codec.decode(encoded.replace("schema-version: 1", "schema-version: 0")));
+      () -> codec.decode(encoded.replace("schema-version: 2", "schema-version: 0")));
     assertThrows(StorageException.class,
-      () -> codec.decode(encoded.replace("schema-version: 1", "schema-version: -1")));
+      () -> codec.decode(encoded.replace("schema-version: 2", "schema-version: -1")));
     assertThrows(StorageException.class,
-      () -> codec.decode(encoded.replace("schema-version: 1\n", "")));
+      () -> codec.decode(encoded.replace("schema-version: 2\n", "")));
     assertThrows(UnsupportedStorageSchemaException.class,
-      () -> codec.decode(encoded.replace("schema-version: 1", "schema-version: 2")));
-    assertThrows(UnsupportedStorageSchemaException.class,
-      () -> codec.decode(encoded.replace("schema-version: 1", "schema-version: 4")));
+      () -> codec.decode(encoded.replace("schema-version: 2", "schema-version: 3")));
   }
 }

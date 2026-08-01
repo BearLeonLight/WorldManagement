@@ -73,7 +73,7 @@ permissions:
     description: Manage private warp trust by player UUID.
     default: op
   worldmanagement.command.owner:
-    description: Set or remove a world owner by online player name or UUID.
+    description: Use owner commands. Mutations also require worldmanagement.admin.ownership.manage.
     default: op
   worldmanagement.command.rank:
     description: Manage ranks and player rank assignments by online player name or UUID.
@@ -84,8 +84,20 @@ permissions:
   worldmanagement.command.storage:
     description: Explicitly migrate metadata between configured storage providers.
     default: op
+  worldmanagement.admin.*:
+    description: Administrative control over all WorldManagement-managed worlds.
+    default: op
+    children:
+      worldmanagement.admin.ownership.manage: true
+      worldmanagement.admin.warp.manage: true
+  worldmanagement.admin.ownership.manage:
+    description: Manage ownership, ranks, and access for every managed world.
+    default: false
+  worldmanagement.admin.warp.manage:
+    description: Manage warps for every managed world.
+    default: false
   worldmanagement.bypass.protection:
-    description: Bypass WorldManagement world protection.
+    description: Bypass protection and entry checks without granting metadata management.
     default: op
   worldmanagement.command.tp:
     description: Teleport yourself to a managed world's spawn or coordinates.

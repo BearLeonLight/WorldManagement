@@ -28,6 +28,7 @@ public final class WarpCommandModule implements WorldManagementCommandModule {
     private static final String WARP_PERMISSION = "worldmanagement.command.warp";
     private static final String TRUST_PERMISSION = "worldmanagement.command.trust";
     private static final String BYPASS_PERMISSION = "worldmanagement.bypass.protection";
+    private static final String ADMIN_PERMISSION = "worldmanagement.admin.warp.manage";
 
     private final WorldManagementService service;
     private final WorldNameValidator nameValidator;
@@ -223,7 +224,7 @@ public final class WarpCommandModule implements WorldManagementCommandModule {
     private boolean canManage(final CommandSender sender, final String worldName) {
         final WorldMetadata metadata = service.managedWorld(worldName).orElse(null);
         if (metadata == null) { send(sender, "warp.world-not-managed"); return false; }
-        if (sender.hasPermission(BYPASS_PERMISSION)) return true;
+        if (sender.hasPermission(ADMIN_PERMISSION)) return true;
         if (sender instanceof Player player && metadata.owner().equals(player.getUniqueId().toString())) return true;
         send(sender, "warp.not-manager");
         return false;

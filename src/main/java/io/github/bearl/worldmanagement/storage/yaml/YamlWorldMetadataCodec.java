@@ -15,6 +15,7 @@ import io.github.bearl.worldmanagement.world.RankPermission;
 import io.github.bearl.worldmanagement.world.RequestedWorldType;
 import io.github.bearl.worldmanagement.world.WorldMetadata;
 import io.github.bearl.worldmanagement.world.WorldEnvironment;
+import io.github.bearl.worldmanagement.world.WorldGeneratorReference;
 import io.github.bearl.worldmanagement.world.WorldIdentitySnapshot;
 import io.github.bearl.worldmanagement.world.WorldLoadState;
 import io.github.bearl.worldmanagement.world.WorldManagementState;
@@ -33,7 +34,7 @@ import java.util.UUID;
 /** Maps typed world metadata to and from a single BoostedYAML document. */
 public final class YamlWorldMetadataCodec implements WorldMetadataCodec {
 
-    public static final int CURRENT_SCHEMA_VERSION = 1;
+    public static final int CURRENT_SCHEMA_VERSION = 2;
 
     private static final String NONE = "NONE";
     private final DisplayNameValidator displayNameValidator = new DisplayNameValidator();
@@ -51,6 +52,11 @@ public final class YamlWorldMetadataCodec implements WorldMetadataCodec {
             document.set("identity.pending.present", metadata.pendingIdentity().isPresent());
             metadata.pendingIdentity().ifPresent(identity -> writeIdentity(document, "identity.pending.snapshot", identity));
             document.set("creation.requested-world-type", metadata.requestedWorldType().map(Enum::name).orElse(NONE));
+            document.set("creation.generator.present", metadata.generator().isPresent());
+            metadata.generator().ifPresent(generator -> {
+                document.set("creation.generator.plugin", generator.pluginName());
+                document.set("creation.generator.id", generator.id());
+            });
             document.set("management-state", metadata.managementState().name());
             document.set("desired-state", metadata.desiredState().name());
             document.set("owner", metadata.owner());
@@ -88,7 +94,7 @@ public final class YamlWorldMetadataCodec implements WorldMetadataCodec {
     public WorldMetadata decode(final String yaml) {
         try {
             final YamlDocument document = YamlDocument.create(new ByteArrayInputStream(yaml.getBytes(StandardCharsets.UTF_8)));
-            requireSchemaVersion(document);
+            final int schemaVersion = requireSchemaVersion(document);
             final String worldName = requireString(document, "world-id");
             final String displayName = requireString(document, "display-name");
             displayNameValidator.validate(displayName);
@@ -104,6 +110,9 @@ public final class YamlWorldMetadataCodec implements WorldMetadataCodec {
                 ? Optional.of(parseIdentity(document, "identity.pending.snapshot"))
                 : Optional.empty();
             final String requestedWorldType = requireString(document, "creation.requested-world-type");
+            final Optional<WorldGeneratorReference> generator = schemaVersion >= 2
+                ? parseGenerator(document)
+                : Optional.empty();
             return new WorldMetadata(
                 worldName,
                 displayName,
@@ -114,6 +123,7 @@ public final class YamlWorldMetadataCodec implements WorldMetadataCodec {
                 NONE.equals(requestedWorldType)
                     ? Optional.empty()
                     : Optional.of(RequestedWorldType.valueOf(requestedWorldType)),
+                generator,
                 WorldManagementState.valueOf(requireString(document, "management-state")),
                 WorldLoadState.valueOf(requireString(document, "desired-state")),
                 requireString(document, "owner"),
@@ -149,10 +159,22 @@ public final class YamlWorldMetadataCodec implements WorldMetadataCodec {
         if (schemaVersion > CURRENT_SCHEMA_VERSION) {
             throw new UnsupportedStorageSchemaException("Unsupported world metadata schema version: " + schemaVersion);
         }
-        if (schemaVersion != CURRENT_SCHEMA_VERSION) {
+        if (schemaVersion < 1) {
             throw new IllegalArgumentException("Missing or invalid world metadata schema version.");
         }
         return schemaVersion;
+    }
+
+    private static Optional<WorldGeneratorReference> parseGenerator(final YamlDocument document) {
+        if (!requireBoolean(document, "creation.generator.present")) {
+            return Optional.empty();
+        }
+        final String pluginName = requireString(document, "creation.generator.plugin");
+        final String id = document.getString("creation.generator.id", null);
+        if (id == null) {
+            throw new IllegalArgumentException("Missing YAML string: creation.generator.id");
+        }
+        return Optional.of(new WorldGeneratorReference(pluginName, id));
     }
 
     private static void writeIdentity(

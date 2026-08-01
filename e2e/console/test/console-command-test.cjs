@@ -232,7 +232,7 @@ async function runConsoleMatrix (paper, logPath, serverRoot) {
 
   await command(paper, logPath, 'wm adopt overworld', '世界 overworld 已加入管理', 'wm adopt <world>')
 
-  await command(paper, logPath, 'wm create basic', '世界 basic 已建立並加入管理', 'wm create <world>')
+  await command(paper, logPath, 'wm create basic NORMAL NORMAL', '世界 basic 已建立並加入管理', 'wm create <world> <environment> <world-type>')
   const basicStoragePaths = [
     path.join(serverRoot, 'world', 'dimensions', 'minecraft', 'basic'),
     path.join(serverRoot, 'basic')
@@ -242,9 +242,8 @@ async function runConsoleMatrix (paper, logPath, serverRoot) {
   )) {
     throw new Error('Paper did not create on-disk storage for basic world.')
   }
-  await command(paper, logPath, 'wm create envonly NORMAL', '世界 envonly 已建立並加入管理', 'wm create <world> <environment>')
   await command(paper, logPath, 'wm create typeonly NORMAL FLAT', '世界 typeonly 已建立並加入管理', 'wm create <world> <environment> <world-type>')
-  await command(paper, logPath, 'wm create imported NORMAL FLAT 12345', '世界 imported 已建立並加入管理', 'wm create <world> <environment> <world-type> <seed>')
+  await command(paper, logPath, 'wm create imported NORMAL FLAT --seed 12345', '世界 imported 已建立並加入管理', 'wm create <world> <environment> <world-type> <options>')
   await command(paper, logPath, 'wm unload imported', '世界 imported 已unloaded', 'wm unload <world>')
   await command(paper, logPath, 'wm load imported', '世界 imported 已loaded', 'wm load <world>')
   await command(paper, logPath, 'wm unload imported', '世界 imported 已unloaded', 'wm unload <world>')
@@ -261,7 +260,7 @@ async function runConsoleMatrix (paper, logPath, serverRoot) {
   await command(paper, logPath, 'wm ownership access overworld mode WHITELIST', '世界存取設定已更新', 'wm ownership access <world> <operation> <value>', false)
   await command(paper, logPath, 'wm ownership access overworld mode NONE', '世界存取設定已更新', 'wm ownership access <world> <operation> <value>', false)
 
-  await command(paper, logPath, 'wm create archive', '世界 archive 已建立並加入管理', 'wm create <world>')
+  await command(paper, logPath, 'wm create archive NORMAL NORMAL', '世界 archive 已建立並加入管理', 'wm create <world> <environment> <world-type>')
   await command(paper, logPath, 'wm unload archive', '世界 archive 已unloaded', 'wm unload <world>')
   await command(paper, logPath, 'wm remove archive', '世界 archive 已停止管理', 'wm remove <world>')
   await command(paper, logPath, 'wm list detached', 'archive', 'wm list detached')
@@ -384,7 +383,7 @@ function readMetadata (serverRoot, worldId) {
   const metadataFile = path.join(serverRoot, 'plugins', 'WorldManagement', 'worlds', `${worldId}.yml`)
   assert.ok(fs.existsSync(metadataFile), `Expected metadata file: ${metadataFile}`)
   const metadata = YAML.parse(fs.readFileSync(metadataFile, 'utf8'))
-  assert.equal(metadata['schema-version'], 1, `${worldId} must remain schema 1 metadata.`)
+  assert.equal(metadata['schema-version'], 2, `${worldId} must use schema 2 metadata.`)
   return metadata
 }
 

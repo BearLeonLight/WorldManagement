@@ -17,6 +17,16 @@ WorldManagement 是面向 Paper 伺服器的世界管理插件，目標是提供
 .\gradlew.bat build
 ```
 
+`clean`只會移除專案`build/`中的編譯產物、報告與隔離 Paper test server，保留可重用的 Node E2E dependencies 和 Gradle user-home downloads。需要重置這些可重建資料或釋放磁碟空間時，個別執行下列 opt-in tasks：
+
+```powershell
+.\gradlew.bat clean
+.\gradlew.bat cleanE2eDependencies
+.\gradlew.bat cleanWorldManagementE2eCache
+```
+
+`cleanE2eDependencies`會移除console與player E2E的`node_modules`；後續E2E task會依既有流程重新執行`npm ci`。`cleanWorldManagementE2eCache`只會移除Gradle user home的`caches/worldmanagement/`，也就是本專案下載並驗證的Paper、Via與LuckPerms artifacts；它不會刪除一般Gradle dependency cache、wrapper或相鄰`TestServer/`的JAR。
+
 除了單元測試，`paperJarSmokeTest` 會在隔離的 `build/paper-jar-smoke/` 目錄啟動實際 Paper server、安裝 shadow JAR、確認 WorldManagement 載入 metadata、執行 `wm list` 後正常停止。無參數執行時會優先使用相鄰 `TestServer/` 目錄最新修改的 `paper-*.jar`；找不到本機 JAR 時，會從 Paper 官方 Fill v3 API 下載與 `paperApiVersionDeclaration` 相符的版本，驗證 SHA-256，並快取於 Gradle user home。
 
 ```powershell
@@ -64,6 +74,7 @@ Paper JAR 選擇參數與 `paperJarSmokeTest` 相同。Via fallback 預設動態
 
 ```text
 /wm create survival NORMAL NORMAL
+/wm create terrain NORMAL NORMAL --generator Terra:normal --seed 8675309
 /wm display-name set survival <green>生存世界</green>
 /wm tp self survival
 ```
@@ -166,7 +177,7 @@ WorldManagement 在 `INFO` 層級輸出精簡的啟動階段摘要：設定與 s
 - `/wm` 採單一 immutable command specification，經 Paper Brigadier + `PluginBootstrap` 編譯實際 tree；同一 spec 驅動 Help、usage/error、權限/模組可見性、completion、canonical routes與runtime leaf IDs
 - `/wm help [page|command path]` 支援 1-based 分頁與完整巢狀 path；錯誤子指令、缺少或多餘參數會回覆最近可見 usage 與 Help 提示
 - `commands.yml` 可設定 root/module aliases與玩家是否預設免 Help 權限，Help topic與completion會依 sender permission及module enablement過濾
-- completion只讀不可變metadata與線上玩家snapshot；Warp只提示可由metadata證明對所有玩家可用的PUBLIC候選，owner/bypass管理型world參數在尚無authorization snapshot時需手動輸入world ID，最終授權仍由指令執行階段處理
+- completion只讀不可變metadata、線上玩家與每秒更新的管理權限snapshot；world owner只看到自己可管理的世界，`worldmanagement.admin.ownership.manage`或`.warp.manage`可看到對應模組的全部受管世界，最終授權仍由指令執行階段處理
 - `modules.yml` 提供 lifecycle、warp、ownership、protection、storage 的獨立功能開關；停用模組時其 command branch 與 listener 不會啟用
 - `OFF`、`BEST_EFFORT`、`STRICT` audit policy；破壞性操作在 strict audit 無法排入時會拒絕
 - bounded單一I/O worker、migration期間metadata mutation freeze/target rollback，以及不阻塞Paper thread的event-driven shutdown；未提交的teleport會立即拒絕，已提交的`teleportAsync`會與指令結果分離並持續drain到底層Paper future完成；同步shutdown admission失敗不會跳過terminal resource close。terminal resource close由有硬上限的受管daemon worker逐項隔離，既有I/O或close忽略interrupt時仍會嘗試後續資源，逾時future會明確失敗
@@ -176,6 +187,8 @@ WorldManagement 在 `INFO` 層級輸出精簡的啟動階段摘要：設定與 s
 - 玩家與 RCON 接收 Adventure Component；本機控制台以固定 ANSI 16 色呈現啟動摘要與指令回覆，Paper 檔案 log 保持純文字
 - 自訂 locale 缺少的 key 會從 JAR 內建 template 自動補入並保存；無效 key 只在執行時回退，不覆寫管理員內容
 - `hooks.yml` 預設資源，設定啟動時會驗證 hook
+
+權限模型：`worldmanagement.bypass.protection`只用於保護與進入繞過，不提供ownership或Warp管理能力。全域管理分別使用`worldmanagement.admin.ownership.manage`與`worldmanagement.admin.warp.manage`，也可集中授予`worldmanagement.admin.*`。`owner set/remove`一律需要ownership管理員權限，世界owner不可自行轉讓或放棄。
 
 MySQL/MariaDB 的 adapter 可使用 [設定與 metadata](docs/configuration.md) 中的 property-gated integration test，對專用測試資料庫做實際連線驗證。
 

@@ -4,4 +4,4 @@ bin/
 out/
 *.iml
 plan/
-e2e/player/node_modules/
+e2e/*/node_modules/

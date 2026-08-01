@@ -94,6 +94,7 @@ final class BrigadierCommandSpecCompiler {
                 node.suggestions().ifPresent(argumentBuilder::suggests);
                 yield argumentBuilder;
             }
+            case CommandNodeSpec.TypedArgumentSegment argument -> typedArgument(argument);
         };
         final java.util.List<String> topicPath;
         if (node.segment() instanceof CommandNodeSpec.LiteralSegment literal) {
@@ -121,7 +122,8 @@ final class BrigadierCommandSpecCompiler {
         final java.util.List<String> topicPath
     ) {
         if (node.segment() instanceof CommandNodeSpec.ArgumentSegment argument
-            && argument.kind() == CommandArgumentKind.GREEDY_STRING) {
+            && argument.kind() == CommandArgumentKind.GREEDY_STRING
+            || node.segment() instanceof CommandNodeSpec.TypedArgumentSegment) {
             return;
         }
         if (node.children().isEmpty() && node.execution().isPresent()) {
@@ -176,5 +178,12 @@ final class BrigadierCommandSpecCompiler {
             throw new IllegalArgumentException("Root command child must declare concrete access.");
         }
         return access;
+    }
+
+    @SuppressWarnings({"rawtypes", "unchecked"})
+    private static com.mojang.brigadier.builder.RequiredArgumentBuilder<CommandSourceStack, ?> typedArgument(
+        final CommandNodeSpec.TypedArgumentSegment argument
+    ) {
+        return Commands.argument(argument.name(), (com.mojang.brigadier.arguments.ArgumentType) argument.type());
     }
 }

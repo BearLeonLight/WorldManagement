@@ -4,6 +4,7 @@ import java.util.Collections;
 import java.util.IdentityHashMap;
 import java.util.Objects;
 import java.util.Set;
+import java.util.List;
 import net.kyori.adventure.audience.Audience;
 import net.kyori.adventure.text.Component;
 import org.bukkit.command.CommandSender;
@@ -59,6 +60,26 @@ public final class CommandMessageSender {
 
     public void send(final CommandSender sender, final Component message) {
         send(capture(sender), message);
+    }
+
+    public void send(final CommandSender sender, final List<Component> messages) {
+        final Target target = capture(sender);
+        final List<Component> immutableMessages = List.copyOf(Objects.requireNonNull(messages, "messages"));
+        if (!target.deliverable()) {
+            return;
+        }
+        final Runnable delivery = () -> immutableMessages.forEach(message -> {
+            if (target.console()) {
+                consoleOutput.info(Objects.requireNonNull(message, "message"));
+            } else {
+                target.audience().sendMessage(Objects.requireNonNull(message, "message"));
+            }
+        });
+        if (target.player() != null) {
+            dispatcher.executeFor(target.player(), delivery, () -> { });
+        } else {
+            dispatcher.executeGlobal(delivery);
+        }
     }
 
     private static CommandSender schedulerOwner(final CommandSender sender) {

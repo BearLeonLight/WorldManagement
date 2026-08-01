@@ -2,6 +2,7 @@ package io.github.bearl.worldmanagement.world.lifecycle;
 
 import io.github.bearl.worldmanagement.world.LifecycleCapability;
 import io.github.bearl.worldmanagement.world.VerifiedWorldRef;
+import io.github.bearl.worldmanagement.world.WorldGeneratorReference;
 import io.github.bearl.worldmanagement.world.WorldIdentitySnapshot;
 import java.util.Objects;
 import java.util.concurrent.CompletableFuture;
@@ -14,9 +15,39 @@ public interface WorldRuntimeGateway {
 
     LifecycleWorld create(String worldName, WorldEnvironment environment, WorldType type, Long seed);
 
+    default LifecycleWorld create(final WorldCreationRequest request) {
+        final WorldCreationRequest required = Objects.requireNonNull(request, "request");
+        if (required.generator().isPresent()) {
+            throw new UnsupportedOperationException("This runtime gateway does not support custom generators.");
+        }
+        return create(
+            required.worldName(),
+            required.environment(),
+            required.type(),
+            required.seed().isPresent() ? required.seed().getAsLong() : null
+        );
+    }
+
     LoadResult loadUnmanaged(String worldName, WorldEnvironment environment);
 
     LoadResult load(WorldStorageGateway.LoadClaim claim);
+
+    default LoadResult load(
+        final WorldStorageGateway.LoadClaim claim,
+        final Optional<WorldGeneratorReference> generator
+    ) {
+        Objects.requireNonNull(generator, "generator");
+        return load(claim);
+    }
+
+    default LoadResult load(
+        final WorldStorageGateway.LoadClaim claim,
+        final WorldEnvironment environment,
+        final Optional<WorldGeneratorReference> generator
+    ) {
+        Objects.requireNonNull(environment, "environment");
+        return load(claim, generator);
+    }
 
     boolean unload(LifecycleWorld world, boolean save);
 
