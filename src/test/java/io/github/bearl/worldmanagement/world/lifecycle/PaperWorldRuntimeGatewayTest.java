@@ -1,10 +1,14 @@
 package io.github.bearl.worldmanagement.world.lifecycle;
 
+import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import io.github.bearl.worldmanagement.world.LifecycleCapability;
+import io.github.bearl.worldmanagement.world.VerifiedWorldRef;
 import io.github.bearl.worldmanagement.world.WorldEnvironment;
+import io.github.bearl.worldmanagement.world.WorldGeneratorReference;
 import io.github.bearl.worldmanagement.world.WorldIdentitySnapshot;
 import io.papermc.paper.threadedregions.scheduler.EntityScheduler;
 import java.lang.reflect.Proxy;
@@ -16,6 +20,7 @@ import java.util.concurrent.atomic.AtomicReference;
 import org.bukkit.Location;
 import org.bukkit.NamespacedKey;
 import org.bukkit.World;
+import org.bukkit.WorldCreator;
 import org.bukkit.entity.Player;
 import org.bukkit.plugin.Plugin;
 import org.bukkit.plugin.PluginManager;
@@ -25,6 +30,160 @@ final class PaperWorldRuntimeGatewayTest {
 
     private static final UUID SOURCE_UUID = UUID.fromString("11111111-1111-1111-1111-111111111111");
     private static final UUID TARGET_UUID = UUID.fromString("22222222-2222-2222-2222-222222222222");
+
+    @Test
+    void mapsPaperCreationSettingsToWorldCreator() {
+        final PaperWorldRuntimeGateway gateway = gateway(
+            world("source", SOURCE_UUID, List.of()), world("target", TARGET_UUID, List.of())
+        );
+        final WorldCreationRequest request = new WorldCreationRequest(
+            "creative",
+            WorldRuntimeGateway.WorldEnvironment.NETHER,
+            WorldRuntimeGateway.WorldType.FLAT,
+            java.util.OptionalLong.of(8675309L),
+            Optional.empty(),
+            Optional.of("{\"layers\":[],\"biome\":\"plains\"}"),
+            false,
+            false,
+            Optional.empty(),
+            Optional.of(new WorldSpawnPosition(12.5, 80.0, -4.5, 90.0f, 15.0f)),
+            false
+        );
+
+        final WorldCreator creator = gateway.worldCreator(request);
+
+        assertEquals(NamespacedKey.minecraft("creative"), creator.key());
+        assertEquals(World.Environment.NETHER, creator.environment());
+        assertEquals(org.bukkit.WorldType.FLAT, creator.type());
+        assertEquals(8675309L, creator.seed());
+        assertEquals("{\"layers\":[],\"biome\":\"plains\"}", creator.generatorSettings());
+        assertFalse(creator.generateStructures());
+        assertFalse(creator.bonusChest());
+        assertEquals(io.papermc.paper.math.Position.fine(12.5, 80.0, -4.5), creator.forcedSpawnPosition());
+        assertEquals(90.0f, creator.forcedSpawnYaw());
+        assertEquals(15.0f, creator.forcedSpawnPitch());
+    }
+
+    @Test
+    void mapsBonusChestWhenForcedSpawnIsAbsent() {
+        final PaperWorldRuntimeGateway gateway = gateway(
+            world("source", SOURCE_UUID, List.of()), world("target", TARGET_UUID, List.of())
+        );
+        final WorldCreationRequest request = new WorldCreationRequest(
+            "creative",
+            WorldRuntimeGateway.WorldEnvironment.NORMAL,
+            WorldRuntimeGateway.WorldType.NORMAL,
+            java.util.OptionalLong.empty(),
+            Optional.empty(),
+            Optional.empty(),
+            true,
+            true,
+            Optional.empty(),
+            Optional.empty(),
+            false
+        );
+
+        assertTrue(gateway.worldCreator(request).bonusChest());
+    }
+
+    @Test
+    void rejectsBonusChestWithForcedSpawnBecausePaperCannotHonorBoth() {
+        assertThrows(IllegalArgumentException.class, () -> new WorldCreationRequest(
+            "creative",
+            WorldRuntimeGateway.WorldEnvironment.NORMAL,
+            WorldRuntimeGateway.WorldType.NORMAL,
+            java.util.OptionalLong.empty(),
+            Optional.empty(),
+            Optional.empty(),
+            true,
+            true,
+            Optional.empty(),
+            Optional.of(new WorldSpawnPosition(0, 64, 0, 0, 0)),
+            false
+        ));
+    }
+
+    @Test
+    void defaultRuntimeGatewayRejectsUnsupportedBiomeProvider() {
+        final WorldRuntimeGateway gateway = (WorldRuntimeGateway) Proxy.newProxyInstance(
+            WorldRuntimeGateway.class.getClassLoader(),
+            new Class<?>[] {WorldRuntimeGateway.class},
+            (proxy, method, arguments) -> method.isDefault()
+                ? java.lang.reflect.InvocationHandler.invokeDefault(proxy, method, arguments)
+                : defaultValue(method.getReturnType())
+        );
+        final WorldCreationRequest request = new WorldCreationRequest(
+            "creative",
+            WorldRuntimeGateway.WorldEnvironment.NORMAL,
+            WorldRuntimeGateway.WorldType.NORMAL,
+            java.util.OptionalLong.empty(),
+            Optional.empty(),
+            Optional.empty(),
+            true,
+            false,
+            Optional.of(WorldGeneratorReference.parse("Terra:climate")),
+            Optional.empty(),
+            false
+        );
+
+        assertThrows(UnsupportedOperationException.class, () -> gateway.create(request));
+    }
+
+    @Test
+    void failsManagedLoadBeforeWorldCreationWhenBiomeProviderIsUnavailable() {
+        final PaperWorldRuntimeGateway gateway = gateway(
+            world("source", SOURCE_UUID, List.of()), world("target", TARGET_UUID, List.of())
+        );
+        final WorldStorageGateway.LoadClaim claim = new WorldStorageGateway.LoadClaim() {
+            @Override
+            public VerifiedWorldRef world() {
+                return new VerifiedWorldRef("creative", "minecraft:creative", SOURCE_UUID);
+            }
+
+            @Override
+            public long metadataVersion() {
+                return 1L;
+            }
+        };
+
+        final WorldRuntimeGateway.LoadResult result = gateway.load(
+            claim,
+            WorldRuntimeGateway.WorldEnvironment.NORMAL,
+            Optional.empty(),
+            Optional.of(WorldGeneratorReference.parse("MissingProvider:climate"))
+        );
+
+        assertTrue(result.world().isEmpty());
+        assertFalse(result.newlyLoaded());
+    }
+
+    @Test
+    void rejectsRacingLoadedRuntimeWhenProviderProvenanceCannotBeProven() {
+        final PaperWorldRuntimeGateway gateway = gateway(
+            world("source", SOURCE_UUID, List.of()), world("target", TARGET_UUID, List.of())
+        );
+        final WorldStorageGateway.LoadClaim claim = new WorldStorageGateway.LoadClaim() {
+            @Override
+            public VerifiedWorldRef world() {
+                return new VerifiedWorldRef("source", "minecraft:source", SOURCE_UUID);
+            }
+
+            @Override
+            public long metadataVersion() {
+                return 1L;
+            }
+        };
+
+        final WorldRuntimeGateway.LoadResult result = gateway.load(
+            claim,
+            WorldRuntimeGateway.WorldEnvironment.NORMAL,
+            Optional.empty(),
+            Optional.of(WorldGeneratorReference.parse("Terra:climate"))
+        );
+
+        assertTrue(result.world().isEmpty());
+        assertFalse(result.newlyLoaded());
+    }
 
     @Test
     void shutdownWaitsForAlreadySubmittedPaperTeleport() {

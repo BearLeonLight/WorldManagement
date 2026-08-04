@@ -12,6 +12,10 @@ dependencies:
       load: BEFORE
       required: false
       join-classpath: true
+    Multiverse-Core:
+      load: BEFORE
+      required: false
+      join-classpath: true
 permissions:
   worldmanagement.command.help:
     description: View command help for commands available to the sender.
@@ -46,7 +50,7 @@ permissions:
     description: Import and register an existing world directory.
     default: op
   worldmanagement.command.delete:
-    description: Confirm a restart-finalized deletion for one lifecycle or uniquely loaded runtime world.
+    description: Confirm an immediate deletion for one lifecycle or uniquely loaded runtime world.
     default: op
   worldmanagement.command.identity.show:
     description: Show persisted and observed world identity state.

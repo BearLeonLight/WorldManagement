@@ -23,14 +23,30 @@ final class CreateCommandOptionsArgument implements CustomArgumentType<CreateCom
 
     private static final SimpleCommandExceptionType INVALID_OPTIONS =
         new SimpleCommandExceptionType(new LiteralMessage("Invalid create options."));
-    private static final List<String> OPTION_KEYS = List.of("--generator", "--seed", "--detached");
-    private static final Set<String> VALUE_OPTIONS = Set.of("--generator", "--seed");
+    private static final List<String> OPTION_KEYS = List.of(
+        "--biome", "--detached", "--force-spawn-position", "--generate-bonus-chest",
+        "--generator", "--generator-settings", "--no-structures", "--seed"
+    );
+    private static final Set<String> VALUE_OPTIONS = Set.of(
+        "--biome", "--force-spawn-position", "--generator", "--generator-settings", "--seed"
+    );
 
     private final CreateCommandOptionParser parser = new CreateCommandOptionParser();
     private final Supplier<? extends Collection<String>> generatorPlugins;
+    private final Supplier<? extends Collection<String>> biomeProviderPlugins;
 
     CreateCommandOptionsArgument(final Supplier<? extends Collection<String>> generatorPlugins) {
+        this(generatorPlugins, generatorPlugins);
+    }
+
+    CreateCommandOptionsArgument(
+        final Supplier<? extends Collection<String>> generatorPlugins,
+        final Supplier<? extends Collection<String>> biomeProviderPlugins
+    ) {
         this.generatorPlugins = java.util.Objects.requireNonNull(generatorPlugins, "generatorPlugins");
+        this.biomeProviderPlugins = java.util.Objects.requireNonNull(
+            biomeProviderPlugins, "biomeProviderPlugins"
+        );
     }
 
     @Override
@@ -62,6 +78,8 @@ final class CreateCommandOptionsArgument implements CustomArgumentType<CreateCom
             candidates = OPTION_KEYS.stream().filter(key -> !partial.used().contains(key)).toList();
         } else if (partial.expectedValue().equals("--generator")) {
             candidates = generatorPlugins.get();
+        } else if (partial.expectedValue().equals("--biome")) {
+            candidates = biomeProviderPlugins.get();
         } else {
             candidates = List.of();
         }

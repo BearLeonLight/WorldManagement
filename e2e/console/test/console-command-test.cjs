@@ -42,10 +42,10 @@ async function runConsoleSuite (paperProcesses) {
   const paperLogPath = path.join(configuration.serverRoot, 'logs', 'latest.log')
   const publishedLogPath = path.join(configuration.serverRoot, 'latest.log')
   const first = launchPaper(configuration, consoleLogPath, 'w', paperProcesses)
-  let recoveryTargets
+  let deletedTargets
   try {
     await waitForLog(consoleLogPath, '[WorldManagement] Enabled WorldManagement', 120000, 'Paper startup', 0, first.paper)
-    recoveryTargets = await runConsoleMatrix(first.paper, paperLogPath, configuration.serverRoot)
+    deletedTargets = await runConsoleMatrix(first.paper, paperLogPath, configuration.serverRoot)
   } finally {
     await stopPaper(first, 'console Paper', paperProcesses, consoleLogPath, 0)
   }
@@ -57,7 +57,9 @@ async function runConsoleSuite (paperProcesses) {
       consoleLogPath, '[WorldManagement] Enabled WorldManagement', 120000,
       'Paper recovery startup', restartOffset, second.paper
     )
-    assertRecoveredDeletes(configuration.serverRoot, recoveryTargets)
+    assertDeletedWorldsAbsent(configuration.serverRoot, deletedTargets)
+    assertMultiverseUntracked(configuration.serverRoot, 'archive')
+    assertMultiverseUntracked(configuration.serverRoot, 'basic')
   } finally {
     await stopPaper(second, 'console recovery Paper', paperProcesses, consoleLogPath, restartOffset)
   }
@@ -98,6 +100,7 @@ function loadConfiguration () {
     pluginJar: requiredFile('WM_PLUGIN_JAR'),
     e2eSupportJar: requiredFile('WM_E2E_SUPPORT_JAR'),
     luckPermsPlugin: process.env.WM_LUCKPERMS_PLUGIN_JAR,
+    multiversePlugin: requiredFile('WM_MULTIVERSE_PLUGIN_JAR'),
     luckPermsArtifact: {
       fileName: requiredValue('WM_LUCKPERMS_FILE_NAME'),
       cacheDirectory: requiredValue('WM_LUCKPERMS_CACHE_DIR'),
@@ -122,6 +125,7 @@ function prepareServer (configuration) {
   fs.copyFileSync(configuration.pluginJar, path.join(plugins, path.basename(configuration.pluginJar)))
   fs.copyFileSync(configuration.e2eSupportJar, path.join(plugins, path.basename(configuration.e2eSupportJar)))
   fs.copyFileSync(configuration.luckPermsPlugin, path.join(plugins, path.basename(configuration.luckPermsPlugin)))
+  fs.copyFileSync(configuration.multiversePlugin, path.join(plugins, path.basename(configuration.multiversePlugin)))
   fs.writeFileSync(path.join(configuration.serverRoot, 'eula.txt'), 'eula=true\n')
   fs.writeFileSync(path.join(configuration.serverRoot, 'server.properties'), [
     'server-port=0',
@@ -309,7 +313,9 @@ async function runConsoleMatrix (paper, logPath, serverRoot) {
     '已永久清除已停止管理世界 adoptdetached', 'wm remove <world> purge confirm', false
   )
 
-  await command(paper, logPath, 'wm create basic NORMAL NORMAL', '世界 basic 已建立並加入管理', 'wm create <world> <environment> <world-type>')
+  await feedback(paper, logPath, 'mv create basic NORMAL', "World 'basic' created!")
+  assertMultiverseTracked(serverRoot, 'basic')
+  await command(paper, logPath, 'wm adopt basic', '世界 basic 已加入管理', 'wm adopt <world>')
   const basicStoragePaths = [
     path.join(serverRoot, 'world', 'dimensions', 'minecraft', 'basic'),
     path.join(serverRoot, 'basic')
@@ -378,9 +384,12 @@ async function runConsoleMatrix (paper, logPath, serverRoot) {
   await command(paper, logPath, 'wm ownership access overworld mode WHITELIST', '世界存取設定已更新', 'wm ownership access <world> <operation> <value>', false)
   await command(paper, logPath, 'wm ownership access overworld mode NONE', '世界存取設定已更新', 'wm ownership access <world> <operation> <value>', false)
 
-  await command(paper, logPath, 'wm create archive NORMAL NORMAL', '世界 archive 已建立並加入管理', 'wm create <world> <environment> <world-type>')
+  await feedback(paper, logPath, 'mv create archive NORMAL', "World 'archive' created!")
+  assertMultiverseTracked(serverRoot, 'archive')
+  await command(paper, logPath, 'wm adopt archive', '世界 archive 已加入管理', 'wm adopt <world>')
   await command(paper, logPath, 'wm unload archive', '世界 archive 已unloaded', 'wm unload <world>')
   await command(paper, logPath, 'wm remove archive', '世界 archive 已停止管理', 'wm remove <world>')
+  assertMultiverseUntracked(serverRoot, 'archive')
   await command(paper, logPath, 'wm list detached', 'archive', 'wm list detached')
   assert.equal(readMetadata(serverRoot, 'archive')['management-state'], 'DETACHED')
   await command(paper, logPath, 'wm manage archive', '世界 archive 已重新加入管理', 'wm manage <world>')
@@ -388,8 +397,8 @@ async function runConsoleMatrix (paper, logPath, serverRoot) {
   await command(paper, logPath, 'wm remove archive purge confirm', '已永久清除已停止管理世界 archive', 'wm remove <world> purge confirm')
 
   await command(paper, logPath, 'wm delete basic confirm', '世界 basic 已完成存檔並卸載', 'wm delete <world> confirm')
-  await command(paper, logPath, 'wm delete basic confirm', '將於下次伺服器啟動時完成刪除', 'wm delete <world> confirm')
-  assertDeletingMetadata(readMetadata(serverRoot, 'basic'), 'STANDARD')
+  await command(paper, logPath, 'wm delete basic confirm', '世界 basic 已永久刪除', 'wm delete <world> confirm')
+  assertMultiverseUntracked(serverRoot, 'basic')
 
   await feedback(paper, logPath, 'wme2e world create autodelete', 'WM_E2E_WORLD_CREATED world=minecraft:autodelete loaded=true')
   await command(
@@ -400,20 +409,10 @@ async function runConsoleMatrix (paper, logPath, serverRoot) {
   assert.equal(readMetadata(serverRoot, 'autodelete')['registration-source'], 'DELETE_AUTO')
   await command(
     paper, logPath, 'wm delete autodelete confirm',
-    '將於下次伺服器啟動時完成刪除', 'wm delete <world> confirm', false
-  )
-  assertDeletingMetadata(readMetadata(serverRoot, 'autodelete'), 'DELETE_AUTO')
-  assert.ok(
-    findDirectories(serverRoot, '.worldmanagement-quarantine').length > 0,
-    'Pending restart delete must retain a quarantine claim.'
+    '世界 autodelete 已永久刪除', 'wm delete <world> confirm', false
   )
 
-  await command(paper, logPath, 'wmstore migrate INVALID SQLITE confirm', '未知的儲存供應者', 'wm storage migrate <source> <target> confirm')
-  await command(paper, logPath, 'wm storage migrate YAML SQLITE confirm', '已遷移', 'wm storage migrate <source> <target> confirm')
-  if (!fs.existsSync(path.join(serverRoot, 'plugins', 'WorldManagement', 'migration-target.db'))) {
-    throw new Error('Console storage migration did not create the SQLite target.')
-  }
-  return [
+  const deletedTargets = [
     { worldId: 'basic', storagePaths: basicStoragePaths },
     {
       worldId: 'autodelete',
@@ -423,28 +422,27 @@ async function runConsoleMatrix (paper, logPath, serverRoot) {
       ]
     }
   ]
+  assertDeletedWorldsAbsent(serverRoot, deletedTargets)
+
+  await command(paper, logPath, 'wmstore migrate INVALID SQLITE confirm', '未知的儲存供應者', 'wm storage migrate <source> <target> confirm')
+  await command(paper, logPath, 'wm storage migrate YAML SQLITE confirm', '已遷移', 'wm storage migrate <source> <target> confirm')
+  if (!fs.existsSync(path.join(serverRoot, 'plugins', 'WorldManagement', 'migration-target.db'))) {
+    throw new Error('Console storage migration did not create the SQLite target.')
+  }
+  return deletedTargets
 }
 
-function assertDeletingMetadata (metadata, registrationSource) {
-  assert.equal(metadata['management-state'], 'DELETING')
-  assert.equal(metadata['registration-source'], registrationSource)
-  assert.match(
-    metadata.deletion?.['transaction-id'],
-    /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i
-  )
-}
-
-function assertRecoveredDeletes (serverRoot, targets) {
+function assertDeletedWorldsAbsent (serverRoot, targets) {
   for (const { worldId, storagePaths } of targets) {
     assert.equal(
       fs.existsSync(path.join(serverRoot, 'plugins', 'WorldManagement', 'worlds', `${worldId}.yml`)),
       false,
-      `Startup recovery left ${worldId} metadata behind.`
+      `Permanent delete left ${worldId} metadata behind.`
     )
     assert.equal(
       storagePaths.some(candidate => fs.existsSync(candidate)),
       false,
-      `Startup recovery left ${worldId} storage behind.`
+      `Permanent delete left ${worldId} storage behind.`
     )
   }
   assert.equal(
@@ -452,8 +450,23 @@ function assertRecoveredDeletes (serverRoot, targets) {
       fs.readdirSync(directory).length > 0
     ),
     false,
-    'Startup recovery left a quarantine claim behind.'
+    'Permanent delete left a quarantine claim behind.'
   )
+}
+
+function assertMultiverseTracked (serverRoot, worldId) {
+  assert.equal(multiverseTracks(serverRoot, worldId), true, `Multiverse-Core does not track ${worldId}.`)
+}
+
+function assertMultiverseUntracked (serverRoot, worldId) {
+  assert.equal(multiverseTracks(serverRoot, worldId), false, `Multiverse-Core still tracks ${worldId}.`)
+}
+
+function multiverseTracks (serverRoot, worldId) {
+  const worldsPath = path.join(serverRoot, 'plugins', 'Multiverse-Core', 'worlds.yml')
+  assert.ok(fs.existsSync(worldsPath), `Expected Multiverse-Core worlds config: ${worldsPath}`)
+  const worlds = YAML.parse(fs.readFileSync(worldsPath, 'utf8')) ?? {}
+  return Object.values(worlds).some(world => world?.['read-only']?.['legacy-world-name'] === worldId)
 }
 
 async function command (paper, logPath, input, expected, commandPath, creditCoverage = true) {
@@ -551,7 +564,7 @@ function readMetadata (serverRoot, worldId) {
   const metadataFile = path.join(serverRoot, 'plugins', 'WorldManagement', 'worlds', `${worldId}.yml`)
   assert.ok(fs.existsSync(metadataFile), `Expected metadata file: ${metadataFile}`)
   const metadata = YAML.parse(fs.readFileSync(metadataFile, 'utf8'))
-  assert.equal(metadata['schema-version'], 4, `${worldId} must use schema 4 metadata.`)
+  assert.equal(metadata['schema-version'], 5, `${worldId} must use schema 5 metadata.`)
   return metadata
 }
 

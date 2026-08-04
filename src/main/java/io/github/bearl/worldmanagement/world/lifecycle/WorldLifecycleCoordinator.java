@@ -6,6 +6,7 @@ import io.github.bearl.worldmanagement.core.DiagnosticLogger;
 import io.github.bearl.worldmanagement.config.DebugArea;
 import io.github.bearl.worldmanagement.core.WorldThreadDispatcher;
 import io.github.bearl.worldmanagement.core.WorldNameValidator;
+import io.github.bearl.worldmanagement.hook.WorldTrackingHook;
 import io.github.bearl.worldmanagement.world.WorldDeletionClaim;
 import io.github.bearl.worldmanagement.world.WorldManagementService;
 import io.github.bearl.worldmanagement.world.WorldLoadState;
@@ -37,6 +38,7 @@ public final class WorldLifecycleCoordinator {
     private final Duration deletionDelay;
     private final WorldThreadDispatcher threadDispatcher;
     private final Optional<String> fallbackWorld;
+    private final WorldTrackingHook worldTrackingHook;
     private final Map<String, WorldOperationState> activeOperations = new ConcurrentHashMap<>();
     private final Map<String, Long> deleteLoadGenerations = new ConcurrentHashMap<>();
     private final Object operationLock = new Object();
@@ -56,7 +58,7 @@ public final class WorldLifecycleCoordinator {
         final Optional<String> fallbackWorld
     ) {
         this(gateway, metadataService, defaultRankSystemEnabled, ioExecutor, storageGateway,
-            deletionDelay, threadDispatcher, fallbackWorld, null);
+            deletionDelay, threadDispatcher, fallbackWorld, WorldTrackingHook.disabled(), null);
     }
 
     public WorldLifecycleCoordinator(
@@ -70,6 +72,22 @@ public final class WorldLifecycleCoordinator {
         final Optional<String> fallbackWorld,
         final DiagnosticLogger diagnostics
     ) {
+        this(gateway, metadataService, defaultRankSystemEnabled, ioExecutor, storageGateway,
+            deletionDelay, threadDispatcher, fallbackWorld, WorldTrackingHook.disabled(), diagnostics);
+    }
+
+    public WorldLifecycleCoordinator(
+        final WorldRuntimeGateway gateway,
+        final WorldManagementService metadataService,
+        final boolean defaultRankSystemEnabled,
+        final PluginIoExecutor ioExecutor,
+        final WorldStorageGateway storageGateway,
+        final Duration deletionDelay,
+        final WorldThreadDispatcher threadDispatcher,
+        final Optional<String> fallbackWorld,
+        final WorldTrackingHook worldTrackingHook,
+        final DiagnosticLogger diagnostics
+    ) {
         this.gateway = Objects.requireNonNull(gateway, "gateway");
         this.metadataService = Objects.requireNonNull(metadataService, "metadataService");
         this.defaultRankSystemEnabled = defaultRankSystemEnabled;
@@ -78,6 +96,7 @@ public final class WorldLifecycleCoordinator {
         this.deletionDelay = Objects.requireNonNull(deletionDelay, "deletionDelay");
         this.threadDispatcher = Objects.requireNonNull(threadDispatcher, "threadDispatcher");
         this.fallbackWorld = Objects.requireNonNull(fallbackWorld, "fallbackWorld");
+        this.worldTrackingHook = Objects.requireNonNull(worldTrackingHook, "worldTrackingHook");
         this.diagnostics = diagnostics;
     }
 
@@ -144,6 +163,7 @@ public final class WorldLifecycleCoordinator {
                             world.identity(), world.lifecycleCapability(),
                             Optional.of(RequestedWorldType.valueOf(requiredRequest.type().name())),
                             requiredRequest.generator(),
+                            requiredRequest.biomeProvider(),
                             defaultRankSystemEnabled,
                             requiredRequest.detached() ? WorldManagementState.DETACHED : WorldManagementState.ACTIVE,
                             event
@@ -274,12 +294,14 @@ public final class WorldLifecycleCoordinator {
             if (metadata.isEmpty() || metadata.get().managementState() != WorldManagementState.ACTIVE) {
                 return CompletableFuture.completedFuture(RemoveResult.notManaged());
             }
-            return metadataService.remove(worldName, event).thenApply(removal -> switch (removal.status()) {
-                case DETACHED, ALREADY_DETACHED -> RemoveResult.detached();
-                case NOT_MANAGED -> RemoveResult.notManaged();
-                case NOT_READY -> RemoveResult.notReady();
-                case PURGED -> RemoveResult.detached();
-            });
+            return continueOnGlobal(() -> untrack(worldName)
+                ? metadataService.remove(worldName, event).thenApply(removal -> switch (removal.status()) {
+                    case DETACHED, ALREADY_DETACHED -> RemoveResult.detached();
+                    case NOT_MANAGED -> RemoveResult.notManaged();
+                    case NOT_READY -> RemoveResult.notReady();
+                    case PURGED -> RemoveResult.detached();
+                })
+                : CompletableFuture.completedFuture(RemoveResult.trackingRemovalFailed()));
         });
     }
 
@@ -382,7 +404,8 @@ public final class WorldLifecycleCoordinator {
                             final WorldRuntimeGateway.LoadResult loadResult = gateway.load(
                                 claim,
                                 WorldRuntimeGateway.WorldEnvironment.valueOf(current.get().identity().environment().name()),
-                                current.get().generator()
+                                current.get().generator(),
+                                current.get().biomeProvider()
                             );
                             if (loadResult.world().isEmpty()) {
                                 return CompletableFuture.completedFuture(LifecycleResult.failed());
@@ -917,7 +940,8 @@ public final class WorldLifecycleCoordinator {
                     final WorldRuntimeGateway.LoadResult loadResult = gateway.load(
                         claim,
                         WorldRuntimeGateway.WorldEnvironment.valueOf(metadata.identity().environment().name()),
-                        metadata.generator()
+                        metadata.generator(),
+                        metadata.biomeProvider()
                     );
                     if (loadResult.world().isEmpty()) {
                         return CompletableFuture.failedFuture(new IllegalStateException(
@@ -973,7 +997,18 @@ public final class WorldLifecycleCoordinator {
         final AuditEvent event,
         final long loadGeneration
     ) {
+        if (!untrack(worldName)) {
+            return CompletableFuture.completedFuture(DeleteResult.trackingRemovalFailed());
+        }
         return deleteStorageAndMetadata(worldName, event, loadGeneration);
+    }
+
+    private boolean untrack(final String worldName) {
+        try {
+            return worldTrackingHook.untrack(worldName) != WorldTrackingHook.UntrackStatus.FAILED;
+        } catch (final RuntimeException failure) {
+            return false;
+        }
     }
 
     private CompletableFuture<DeleteResult> deleteStorageAndMetadata(
@@ -1040,7 +1075,11 @@ public final class WorldLifecycleCoordinator {
                         || gateway.findWorld(quarantined.world()).isPresent()) {
                         return CompletableFuture.completedFuture(DeleteResult.reloadedAfterTombstone());
                     }
-                    return CompletableFuture.completedFuture(DeleteResult.pendingRestart());
+                    return ioExecutor.execute(() -> storageGateway.delete(quarantined))
+                        .thenCompose(unused -> metadataService.purge(worldName, null))
+                        .thenApply(removal -> removal.status() == WorldManagementService.RemoveStatus.PURGED
+                            ? DeleteResult.deleted()
+                            : DeleteResult.metadataRemovalFailed());
                 }, () -> CompletableFuture.completedFuture(DeleteResult.pendingRestart()));
             })
             .exceptionallyCompose(failure -> {
@@ -1367,6 +1406,7 @@ public final class WorldLifecycleCoordinator {
     public enum RemoveStatus {
         DETACHED,
         PURGED,
+        TRACKING_REMOVAL_FAILED,
         NOT_MANAGED,
         NOT_UNLOADED,
         NOT_READY,
@@ -1376,6 +1416,9 @@ public final class WorldLifecycleCoordinator {
     public record RemoveResult(RemoveStatus status) {
         private static RemoveResult detached() { return new RemoveResult(RemoveStatus.DETACHED); }
         private static RemoveResult purged() { return new RemoveResult(RemoveStatus.PURGED); }
+        private static RemoveResult trackingRemovalFailed() {
+            return new RemoveResult(RemoveStatus.TRACKING_REMOVAL_FAILED);
+        }
         private static RemoveResult notManaged() { return new RemoveResult(RemoveStatus.NOT_MANAGED); }
         private static RemoveResult notUnloaded() { return new RemoveResult(RemoveStatus.NOT_UNLOADED); }
         private static RemoveResult notReady() { return new RemoveResult(RemoveStatus.NOT_READY); }
@@ -1435,6 +1478,7 @@ public final class WorldLifecycleCoordinator {
     public enum DeleteStatus {
         DELETED,
         PENDING_RESTART,
+        TRACKING_REMOVAL_FAILED,
         UNLOADED_REQUIRES_CONFIRMATION,
         RELOADED,
         RELOADED_AFTER_TOMBSTONE,
@@ -1452,6 +1496,9 @@ public final class WorldLifecycleCoordinator {
     public record DeleteResult(DeleteStatus status) {
         private static DeleteResult deleted() { return new DeleteResult(DeleteStatus.DELETED); }
         private static DeleteResult pendingRestart() { return new DeleteResult(DeleteStatus.PENDING_RESTART); }
+        private static DeleteResult trackingRemovalFailed() {
+            return new DeleteResult(DeleteStatus.TRACKING_REMOVAL_FAILED);
+        }
         private static DeleteResult unloadedRequiresConfirmation() {
             return new DeleteResult(DeleteStatus.UNLOADED_REQUIRES_CONFIRMATION);
         }

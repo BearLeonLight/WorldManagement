@@ -8,6 +8,7 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import io.github.bearl.worldmanagement.core.PluginIoExecutor;
 import io.github.bearl.worldmanagement.core.WorldThreadDispatcher;
+import io.github.bearl.worldmanagement.hook.WorldTrackingHook;
 import io.github.bearl.worldmanagement.storage.InMemoryWorldMetadataRepository;
 import io.github.bearl.worldmanagement.storage.StorageException;
 import io.github.bearl.worldmanagement.storage.WorldMetadataRepository;
@@ -36,6 +37,68 @@ final class WorldLifecycleCoordinatorTest {
     Path temporaryDirectory;
 
     @Test
+    void untracksExternalWorldManagerBeforeDetachingWithoutUnloadingRuntime() {
+        final PluginIoExecutor executor = new PluginIoExecutor("LifecycleTest");
+        try {
+            final WorldManagementService metadata = new WorldManagementService(
+                executor, new InMemoryWorldMetadataRepository(), new WorldRegistry()
+            );
+            metadata.load().join();
+            metadata.adopt("creative", true).join();
+            final FakeGateway gateway = new FakeGateway();
+            gateway.loaded.add("creative");
+            final RecordingWorldTrackingHook trackingHook = new RecordingWorldTrackingHook();
+            final WorldLifecycleCoordinator service = new WorldLifecycleCoordinator(
+                gateway, metadata, true, executor, storage(temporaryDirectory), Duration.ZERO,
+                new ImmediateDispatcher(), Optional.empty(), trackingHook, null
+            );
+
+            final WorldLifecycleCoordinator.RemoveResult result = service.remove("creative").join();
+
+            assertEquals(WorldLifecycleCoordinator.RemoveStatus.DETACHED, result.status());
+            assertEquals(java.util.List.of("creative"), trackingHook.untrackedWorlds);
+            assertTrue(gateway.loaded.contains("creative"));
+            assertEquals(0, gateway.saveCalls);
+            assertEquals(
+                io.github.bearl.worldmanagement.world.WorldManagementState.DETACHED,
+                metadata.metadataWorld("creative").orElseThrow().managementState()
+            );
+        } finally {
+            executor.shutdown(Duration.ofSeconds(1));
+        }
+    }
+
+    @Test
+    void refusesDeleteBeforeQuarantineWhenExternalUntrackingFails() throws Exception {
+        final PluginIoExecutor executor = new PluginIoExecutor("LifecycleTest");
+        try {
+            final WorldManagementService metadata = new WorldManagementService(
+                executor, new InMemoryWorldMetadataRepository(), new WorldRegistry()
+            );
+            metadata.load().join();
+            metadata.adopt("creative", true).join();
+            final Path worldDirectory = Files.createDirectories(temporaryDirectory.resolve("creative"));
+            Files.writeString(worldDirectory.resolve("level.dat"), "world");
+            final RecordingWorldTrackingHook trackingHook = new RecordingWorldTrackingHook();
+            trackingHook.status = WorldTrackingHook.UntrackStatus.FAILED;
+            final WorldLifecycleCoordinator service = new WorldLifecycleCoordinator(
+                new FakeGateway(), metadata, true, executor, storage(temporaryDirectory), Duration.ZERO,
+                new ImmediateDispatcher(), Optional.empty(), trackingHook, null
+            );
+
+            final WorldLifecycleCoordinator.DeleteResult result = service.delete("creative").join();
+
+            assertEquals(WorldLifecycleCoordinator.DeleteStatus.TRACKING_REMOVAL_FAILED, result.status());
+            assertEquals(java.util.List.of("creative"), trackingHook.untrackedWorlds);
+            assertTrue(Files.isRegularFile(worldDirectory.resolve("level.dat")));
+            assertTrue(metadata.managedWorld("creative").isPresent());
+            assertTrue(Files.notExists(temporaryDirectory.resolve(".worldmanagement-quarantine")));
+        } finally {
+            executor.shutdown(Duration.ofSeconds(1));
+        }
+    }
+
+    @Test
     void createsWorldAndPersistsItsMetadata() {
         final PluginIoExecutor executor = new PluginIoExecutor("LifecycleTest");
         try {
@@ -54,7 +117,13 @@ final class WorldLifecycleCoordinatorTest {
                 WorldRuntimeGateway.WorldEnvironment.NORMAL,
                 WorldRuntimeGateway.WorldType.NORMAL,
                 java.util.OptionalLong.of(8675309L),
-                Optional.of(WorldGeneratorReference.parse("Terra:normal"))
+                Optional.of(WorldGeneratorReference.parse("Terra:normal")),
+                Optional.empty(),
+                true,
+                false,
+                Optional.of(WorldGeneratorReference.parse("Terra:climate")),
+                Optional.empty(),
+                false
             );
             final WorldLifecycleCoordinator.CreateResult result = service.create(request, null).join();
 
@@ -67,6 +136,7 @@ final class WorldLifecycleCoordinatorTest {
             );
             assertEquals(request, gateway.lastCreateRequest);
             assertEquals(request.generator(), created.generator());
+            assertEquals(request.biomeProvider(), created.biomeProvider());
         } finally {
             executor.shutdown(Duration.ofSeconds(1));
         }
@@ -440,7 +510,8 @@ final class WorldLifecycleCoordinatorTest {
             );
             metadata.adopt(
                 netherIdentity, io.github.bearl.worldmanagement.world.LifecycleCapability.MANAGED,
-                Optional.empty(), true, null
+                Optional.empty(), Optional.empty(),
+                Optional.of(WorldGeneratorReference.parse("Terra:climate")), true, null
             ).join();
             metadata.adopt("lobby", true).join();
             final FakeGateway gateway = new FakeGateway();
@@ -452,6 +523,11 @@ final class WorldLifecycleCoordinatorTest {
 
             assertEquals(WorldLifecycleCoordinator.LifecycleStatus.LOADED, service.loadAsync("creative").join().status());
             assertEquals(WorldRuntimeGateway.WorldEnvironment.NETHER, gateway.lastManagedLoadEnvironment);
+            assertEquals(Optional.empty(), gateway.lastManagedLoadGenerator);
+            assertEquals(
+                Optional.of(WorldGeneratorReference.parse("Terra:climate")),
+                gateway.lastManagedLoadBiomeProvider
+            );
             assertEquals(WorldLifecycleCoordinator.LifecycleStatus.UNLOADED, service.unloadAsync("creative").join().status());
             assertEquals(WorldLifecycleCoordinator.LifecycleStatus.NOT_MANAGED, service.loadAsync("unknown").join().status());
         } finally {
@@ -1354,7 +1430,7 @@ final class WorldLifecycleCoordinatorTest {
     }
 
     @Test
-    void defersPermanentDeleteOfUnloadedWorldUntilStartupRecovery() throws Exception {
+    void permanentlyDeletesUnloadedWorldInTheSameRuntime() throws Exception {
         final PluginIoExecutor executor = new PluginIoExecutor("LifecycleTest");
         try {
             final WorldManagementService metadata = new WorldManagementService(executor, new InMemoryWorldMetadataRepository(), new WorldRegistry());
@@ -1378,19 +1454,11 @@ final class WorldLifecycleCoordinatorTest {
 
             final WorldLifecycleCoordinator.DeleteResult result = service.delete("creative").join();
 
-            assertEquals(WorldLifecycleCoordinator.DeleteStatus.PENDING_RESTART, result.status());
-            final WorldMetadata deleting = metadata.metadataWorld("creative").orElseThrow();
-            assertEquals(
-                io.github.bearl.worldmanagement.world.WorldManagementState.DELETING,
-                deleting.managementState()
-            );
-            assertTrue(deleting.deletionTransactionId().isPresent());
+            assertEquals(WorldLifecycleCoordinator.DeleteStatus.DELETED, result.status());
+            assertTrue(metadata.metadataWorld("creative").isEmpty());
             assertTrue(Files.notExists(worldDirectory));
             final Path quarantineRoot = temporaryDirectory.resolve(".worldmanagement-quarantine");
-            assertTrue(Files.isDirectory(quarantineRoot));
-            try (var entries = Files.list(quarantineRoot)) {
-                assertEquals(1, entries.count());
-            }
+            assertTrue(Files.notExists(quarantineRoot));
         } finally {
             executor.shutdown(Duration.ofSeconds(1));
         }
@@ -1459,7 +1527,7 @@ final class WorldLifecycleCoordinatorTest {
     }
 
     @Test
-    void autoAdoptsUnknownLoadedWorldForRestartFinalizedDelete() throws Exception {
+    void autoAdoptsUnknownLoadedWorldForImmediateConfirmedDelete() throws Exception {
         final PluginIoExecutor executor = new PluginIoExecutor("LifecycleTest");
         try {
             final WorldManagementService metadata = new WorldManagementService(
@@ -1491,17 +1559,8 @@ final class WorldLifecycleCoordinatorTest {
 
             final WorldLifecycleCoordinator.DeleteResult second = service.delete("unknown").join();
 
-            assertEquals(WorldLifecycleCoordinator.DeleteStatus.PENDING_RESTART, second.status());
-            final WorldMetadata deleting = metadata.metadataWorld("unknown").orElseThrow();
-            assertEquals(
-                io.github.bearl.worldmanagement.world.WorldRegistrationSource.DELETE_AUTO,
-                deleting.registrationSource()
-            );
-            assertEquals(
-                io.github.bearl.worldmanagement.world.WorldManagementState.DELETING,
-                deleting.managementState()
-            );
-            assertTrue(deleting.deletionTransactionId().isPresent());
+            assertEquals(WorldLifecycleCoordinator.DeleteStatus.DELETED, second.status());
+            assertTrue(metadata.metadataWorld("unknown").isEmpty());
             assertFalse(Files.exists(worldDirectory));
         } finally {
             executor.shutdown(Duration.ofSeconds(1));
@@ -1761,12 +1820,9 @@ final class WorldLifecycleCoordinatorTest {
 
             final WorldLifecycleCoordinator.DeleteResult second = service.delete("creative").join();
 
-            assertEquals(WorldLifecycleCoordinator.DeleteStatus.PENDING_RESTART, second.status());
+            assertEquals(WorldLifecycleCoordinator.DeleteStatus.DELETED, second.status());
             assertFalse(Files.exists(levelData));
-            assertEquals(
-                io.github.bearl.worldmanagement.world.WorldManagementState.DELETING,
-                metadata.metadataWorld("creative").orElseThrow().managementState()
-            );
+            assertTrue(metadata.metadataWorld("creative").isEmpty());
         } finally {
             executor.shutdown(Duration.ofSeconds(1));
         }
@@ -2024,13 +2080,10 @@ final class WorldLifecycleCoordinatorTest {
 
             final WorldLifecycleCoordinator.DeleteResult result = service.delete("creative").join();
 
-            assertEquals(WorldLifecycleCoordinator.DeleteStatus.PENDING_RESTART, result.status());
-            assertEquals(
-                io.github.bearl.worldmanagement.world.WorldManagementState.DELETING,
-                metadata.metadataWorld("creative").orElseThrow().managementState()
-            );
+            assertEquals(WorldLifecycleCoordinator.DeleteStatus.DELETED, result.status());
+            assertTrue(metadata.metadataWorld("creative").isEmpty());
             assertTrue(Files.notExists(dimension));
-            assertTrue(Files.isDirectory(
+            assertTrue(Files.notExists(
                 dimension.getParent().resolve(".worldmanagement-quarantine")
             ));
         } finally {
@@ -2176,7 +2229,7 @@ final class WorldLifecycleCoordinatorTest {
     }
 
     @Test
-    void stopsRuntimeAccessAfterDeletingTombstoneIsDurable() throws Exception {
+    void permanentlyDeletesAfterDeletingTombstoneIsDurable() throws Exception {
         final PluginIoExecutor executor = new PluginIoExecutor("LifecycleTest");
         try {
             final WorldManagementService metadata = new WorldManagementService(
@@ -2196,18 +2249,15 @@ final class WorldLifecycleCoordinatorTest {
 
             final WorldLifecycleCoordinator.DeleteResult result = service.delete("creative").join();
 
-            assertEquals(WorldLifecycleCoordinator.DeleteStatus.PENDING_RESTART, result.status());
-            assertEquals(
-                io.github.bearl.worldmanagement.world.WorldManagementState.DELETING,
-                metadata.metadataWorld("creative").orElseThrow().managementState()
-            );
+            assertEquals(WorldLifecycleCoordinator.DeleteStatus.DELETED, result.status());
+            assertTrue(metadata.metadataWorld("creative").isEmpty());
         } finally {
             executor.shutdown(Duration.ofSeconds(1));
         }
     }
 
     @Test
-    void keepsQuarantineWhenDeletingCommitAcknowledgementIsLost() throws Exception {
+    void completesDeleteWhenDurableTombstoneAcknowledgementIsRecovered() throws Exception {
         final PluginIoExecutor executor = new PluginIoExecutor("LifecycleTest");
         try {
             final AmbiguousDeletingCommitRepository repository = new AmbiguousDeletingCommitRepository();
@@ -2224,14 +2274,11 @@ final class WorldLifecycleCoordinatorTest {
 
             final WorldLifecycleCoordinator.DeleteResult result = service.delete("creative").join();
 
-            assertEquals(WorldLifecycleCoordinator.DeleteStatus.PENDING_RESTART, result.status());
+            assertEquals(WorldLifecycleCoordinator.DeleteStatus.DELETED, result.status());
             assertFalse(Files.exists(worldDirectory));
-            assertTrue(Files.isDirectory(temporaryDirectory.resolve(".worldmanagement-quarantine")));
-            final WorldMetadata cached = metadata.metadataWorld("creative").orElseThrow();
-            final WorldMetadata persisted = repository.find("creative").orElseThrow();
-            assertEquals(io.github.bearl.worldmanagement.world.WorldManagementState.DELETING, cached.managementState());
-            assertEquals(cached, persisted);
-            assertTrue(cached.deletionTransactionId().isPresent());
+            assertTrue(Files.notExists(temporaryDirectory.resolve(".worldmanagement-quarantine")));
+            assertTrue(metadata.metadataWorld("creative").isEmpty());
+            assertTrue(repository.find("creative").isEmpty());
         } finally {
             executor.shutdown(Duration.ofSeconds(1));
         }
@@ -2264,7 +2311,7 @@ final class WorldLifecycleCoordinatorTest {
     }
 
     @Test
-    void defersPermanentDeleteFailureToStartupRecovery() {
+    void keepsDeletingTombstoneWhenSameRuntimePermanentDeleteFails() {
         final PluginIoExecutor executor = new PluginIoExecutor("LifecycleTest");
         try {
             final WorldManagementService metadata = new WorldManagementService(
@@ -2278,22 +2325,20 @@ final class WorldLifecycleCoordinatorTest {
                 new ImmediateDispatcher(), Optional.empty()
             );
 
-            final WorldLifecycleCoordinator.DeleteResult result = service.delete("creative").join();
-
-            assertEquals(WorldLifecycleCoordinator.DeleteStatus.PENDING_RESTART, result.status());
+            assertThrows(java.util.concurrent.CompletionException.class, () -> service.delete("creative").join());
             assertEquals(
                 io.github.bearl.worldmanagement.world.WorldManagementState.DELETING,
                 metadata.metadataWorld("creative").orElseThrow().managementState()
             );
             assertFalse(storage.restored);
-            assertFalse(storage.deleteCalled);
+            assertTrue(storage.deleteCalled);
         } finally {
             executor.shutdown(Duration.ofSeconds(1));
         }
     }
 
     @Test
-    void defersMetadataPurgeFailureToStartupRecovery() throws Exception {
+    void keepsDeletingTombstoneWhenSameRuntimeMetadataPurgeFails() throws Exception {
         final PluginIoExecutor executor = new PluginIoExecutor("LifecycleTest");
         try {
             final FailingDeleteMetadataRepository repository = new FailingDeleteMetadataRepository();
@@ -2306,9 +2351,7 @@ final class WorldLifecycleCoordinatorTest {
                 new FakeGateway(), metadata, executor, Optional.empty(), temporaryDirectory
             );
 
-            final WorldLifecycleCoordinator.DeleteResult result = service.delete("creative").join();
-
-            assertEquals(WorldLifecycleCoordinator.DeleteStatus.PENDING_RESTART, result.status());
+            assertThrows(java.util.concurrent.CompletionException.class, () -> service.delete("creative").join());
             assertTrue(Files.notExists(worldDirectory));
             assertEquals(
                 io.github.bearl.worldmanagement.world.WorldManagementState.DELETING,
@@ -2447,6 +2490,8 @@ final class WorldLifecycleCoordinatorTest {
         private WorldCreationRequest lastCreateRequest;
         private WorldEnvironment lastUnmanagedLoadEnvironment;
         private WorldEnvironment lastManagedLoadEnvironment;
+        private Optional<WorldGeneratorReference> lastManagedLoadGenerator;
+        private Optional<WorldGeneratorReference> lastManagedLoadBiomeProvider;
         private final java.util.Map<String, io.github.bearl.worldmanagement.world.WorldIdentitySnapshot>
             lookupIdentities = new java.util.HashMap<>();
         private final java.util.Map<String, io.github.bearl.worldmanagement.world.WorldIdentitySnapshot>
@@ -2542,9 +2587,12 @@ final class WorldLifecycleCoordinatorTest {
         public LoadResult load(
             final WorldStorageGateway.LoadClaim claim,
             final WorldEnvironment environment,
-            final Optional<io.github.bearl.worldmanagement.world.WorldGeneratorReference> generator
+            final Optional<io.github.bearl.worldmanagement.world.WorldGeneratorReference> generator,
+            final Optional<io.github.bearl.worldmanagement.world.WorldGeneratorReference> biomeProvider
         ) {
             lastManagedLoadEnvironment = environment;
+            lastManagedLoadGenerator = generator;
+            lastManagedLoadBiomeProvider = biomeProvider;
             return load(claim);
         }
 
@@ -3054,6 +3102,17 @@ final class WorldLifecycleCoordinatorTest {
 
         @Override
         public void cancelOwnedTasks() {
+        }
+    }
+
+    private static final class RecordingWorldTrackingHook implements WorldTrackingHook {
+        private final java.util.List<String> untrackedWorlds = new java.util.ArrayList<>();
+        private UntrackStatus status = UntrackStatus.UNTRACKED;
+
+        @Override
+        public UntrackStatus untrack(final String worldName) {
+            untrackedWorlds.add(worldName);
+            return status;
         }
     }
 

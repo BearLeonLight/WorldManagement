@@ -35,7 +35,7 @@ command:
         detached:
           description: "匯入世界並保留為停止治理狀態。"
       delete:
-        description: "經確認與重啟恢復流程刪除已註冊或目前已載入的世界。"
+        description: "經二次確認後刪除已註冊或目前已載入的世界。"
       identity:
         description: "查看或修復世界識別狀態。"
         show:
@@ -129,7 +129,7 @@ command:
     adopt: "<prefix><red>你沒有接管世界的權限。</red>"
     list: "<prefix><red>你沒有列出受管世界的權限。</red>"
   create:
-    usage: "<gray>用法：</gray><white>/wm create <world> <NORMAL|NETHER|THE_END> <NORMAL|FLAT|AMPLIFIED|LARGE_BIOMES> [--seed <seed>] [--generator <plugin[:id]>] [--detached]</white>"
+    usage: "<gray>用法：</gray><white>/wm create <world> <NORMAL|NETHER|THE_END> <NORMAL|FLAT|AMPLIFIED|LARGE_BIOMES> [--seed <seed>] [--generator <plugin[:id]>] [--generator-settings <json>] [--no-structures] [--generate-bonus-chest] [--biome <plugin[:id]>] [--force-spawn-position <x,y,z[,yaw,pitch]>] [--detached]</white>"
     started: "<prefix><yellow>正在建立世界 <white><world></white>...</yellow>"
     invalid: "<prefix><red>世界建立參數無效。</red>"
     success: "<prefix><green>世界 <white><world></white> 已建立並加入管理。</green>"
@@ -163,6 +163,7 @@ command:
   remove:
     usage: "<gray>用法：</gray><white>/wm remove <world> | /wm remove <world> purge confirm</white>"
     success: "<prefix><green>世界 <white><world></white> 已停止管理，世界檔案與 metadata 仍保留。</green>"
+    tracking-removal-failed: "<prefix><red>Multiverse-Core 無法停止追蹤世界 <white><world></white>；WorldManagement 未變更 metadata 或 runtime。</red>"
     failure: "<prefix><red>無法移除世界 <white><world></white>。</red>"
     not-managed: "<prefix><red>世界 <white><world></white> 不在管理中。</red>"
     operation-in-progress: "<prefix><yellow>世界 <white><world></white> 已有其他操作進行中。</yellow>"
@@ -191,7 +192,8 @@ command:
   delete:
     confirm: "<yellow>請使用 <white>/wm delete <world> [fallback] confirm</white> 確認刪除。</yellow>"
     success: "<prefix><green>世界 <white><world></white> 已永久刪除。</green>"
-    pending-restart: "<prefix><yellow>世界 <white><world></white> 已移入安全隔離區；將於下次伺服器啟動時完成刪除。</yellow>"
+    pending-restart: "<prefix><yellow>世界 <white><world></white> 已移入安全隔離區；伺服器關閉中無法完成，將於下次啟動接續刪除。</yellow>"
+    tracking-removal-failed: "<prefix><red>Multiverse-Core 無法停止追蹤世界 <white><world></white>；尚未隔離或刪除世界資料。</red>"
     unloaded-requires-confirmation: "<prefix><yellow>世界 <white><world></white> 已完成存檔並卸載。請再次執行相同刪除指令以永久刪除。</yellow>"
     reloaded: "<prefix><yellow>世界 <white><world></white> 在刪除流程中被重新載入，已中止刪除並保留資料。</yellow>"
     reloaded-after-tombstone: "<prefix><red>世界 <white><world></white> 在刪除狀態保存後被重新載入；runtime 已隔離，請停止伺服器並檢查 live world 與 quarantine 資料。</red>"

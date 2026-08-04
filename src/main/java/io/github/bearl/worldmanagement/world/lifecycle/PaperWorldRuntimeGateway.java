@@ -74,12 +74,7 @@ public final class PaperWorldRuntimeGateway implements WorldRuntimeGateway {
     @Override
     public LifecycleWorld create(final WorldCreationRequest request) {
         final WorldCreationRequest required = Objects.requireNonNull(request, "request");
-        final WorldCreator creator = WorldCreator.ofKey(NamespacedKey.minecraft(required.worldName()))
-            .environment(toPaperEnvironment(required.environment()))
-            .type(toPaperType(required.type()));
-        if (required.seed().isPresent()) {
-            creator.seed(required.seed().getAsLong());
-        }
+        final WorldCreator creator = worldCreator(required);
         if (required.generator().isPresent()) {
             final org.bukkit.generator.ChunkGenerator generator = generators.resolve(
                 required.worldName(), required.generator().orElseThrow()
@@ -89,10 +84,36 @@ public final class PaperWorldRuntimeGateway implements WorldRuntimeGateway {
             }
             creator.generator(generator);
         }
+        if (required.biomeProvider().isPresent()) {
+            final org.bukkit.generator.BiomeProvider biomeProvider = generators.resolveBiomeProvider(
+                required.worldName(), required.biomeProvider().orElseThrow()
+            ).orElse(null);
+            if (biomeProvider == null) {
+                return null;
+            }
+            creator.biomeProvider(biomeProvider);
+        }
         final LifecycleWorld created = fromPaperWorld(Bukkit.createWorld(creator));
-        return created != null && required.generator().isPresent()
+        return created != null && (required.generator().isPresent() || required.biomeProvider().isPresent())
             ? managed(created)
             : created;
+    }
+
+    WorldCreator worldCreator(final WorldCreationRequest request) {
+        final WorldCreationRequest required = Objects.requireNonNull(request, "request");
+        final WorldCreator creator = WorldCreator.ofKey(NamespacedKey.minecraft(required.worldName()))
+            .environment(toPaperEnvironment(required.environment()))
+            .type(toPaperType(required.type()))
+            .generateStructures(required.generateStructures())
+            .bonusChest(required.bonusChest());
+        required.seed().ifPresent(creator::seed);
+        required.generatorSettings().ifPresent(creator::generatorSettings);
+        required.forcedSpawnPosition().ifPresent(spawn -> creator.forcedSpawnPosition(
+            io.papermc.paper.math.Position.fine(spawn.x(), spawn.y(), spawn.z()),
+            spawn.yaw(),
+            spawn.pitch()
+        ));
+        return creator;
     }
 
     @Override
@@ -109,7 +130,7 @@ public final class PaperWorldRuntimeGateway implements WorldRuntimeGateway {
 
     @Override
     public LoadResult load(final WorldStorageGateway.LoadClaim claim) {
-        return load(claim, Optional.empty());
+        return load(claim, Optional.empty(), Optional.empty());
     }
 
     @Override
@@ -117,7 +138,15 @@ public final class PaperWorldRuntimeGateway implements WorldRuntimeGateway {
         final WorldStorageGateway.LoadClaim claim,
         final Optional<io.github.bearl.worldmanagement.world.WorldGeneratorReference> generatorReference
     ) {
-        return load(claim, WorldEnvironment.NORMAL, generatorReference);
+        return load(claim, WorldEnvironment.NORMAL, generatorReference, Optional.empty());
+    }
+
+    private LoadResult load(
+        final WorldStorageGateway.LoadClaim claim,
+        final Optional<io.github.bearl.worldmanagement.world.WorldGeneratorReference> generatorReference,
+        final Optional<io.github.bearl.worldmanagement.world.WorldGeneratorReference> biomeProviderReference
+    ) {
+        return load(claim, WorldEnvironment.NORMAL, generatorReference, biomeProviderReference);
     }
 
     @Override
@@ -126,6 +155,16 @@ public final class PaperWorldRuntimeGateway implements WorldRuntimeGateway {
         final WorldEnvironment environment,
         final Optional<io.github.bearl.worldmanagement.world.WorldGeneratorReference> generatorReference
     ) {
+        return load(claim, environment, generatorReference, Optional.empty());
+    }
+
+    @Override
+    public LoadResult load(
+        final WorldStorageGateway.LoadClaim claim,
+        final WorldEnvironment environment,
+        final Optional<io.github.bearl.worldmanagement.world.WorldGeneratorReference> generatorReference,
+        final Optional<io.github.bearl.worldmanagement.world.WorldGeneratorReference> biomeProviderReference
+    ) {
         final WorldStorageGateway.LoadClaim requiredClaim = Objects.requireNonNull(claim, "claim");
         final NamespacedKey key = NamespacedKey.fromString(requiredClaim.world().paperKey());
         if (key == null) {
@@ -133,11 +172,15 @@ public final class PaperWorldRuntimeGateway implements WorldRuntimeGateway {
         }
         final World existing = runtimeResolver.world(key);
         if (existing != null) {
+            if (Objects.requireNonNull(generatorReference, "generatorReference").isPresent()
+                || Objects.requireNonNull(biomeProviderReference, "biomeProviderReference").isPresent()) {
+                return LoadResult.failed();
+            }
             return LoadResult.loaded(fromPaperWorld(existing), false);
         }
         final WorldCreator creator = WorldCreator.ofKey(key)
             .environment(toPaperEnvironment(Objects.requireNonNull(environment, "environment")));
-        if (Objects.requireNonNull(generatorReference, "generatorReference").isPresent()) {
+        if (generatorReference.isPresent()) {
             final org.bukkit.generator.ChunkGenerator generator = generators.resolve(
                 requiredClaim.world().worldId(), generatorReference.orElseThrow()
             ).orElse(null);
@@ -146,12 +189,24 @@ public final class PaperWorldRuntimeGateway implements WorldRuntimeGateway {
             }
             creator.generator(generator);
         }
+        if (biomeProviderReference.isPresent()) {
+            final org.bukkit.generator.BiomeProvider biomeProvider = generators.resolveBiomeProvider(
+                requiredClaim.world().worldId(), biomeProviderReference.orElseThrow()
+            ).orElse(null);
+            if (biomeProvider == null) {
+                return LoadResult.failed();
+            }
+            creator.biomeProvider(biomeProvider);
+        }
         final World loaded = Bukkit.createWorld(creator);
         if (loaded == null) {
             return LoadResult.failed();
         }
         final LifecycleWorld captured = fromPaperWorld(loaded);
-        return LoadResult.loaded(generatorReference.isPresent() ? managed(captured) : captured, true);
+        return LoadResult.loaded(
+            generatorReference.isPresent() || biomeProviderReference.isPresent() ? managed(captured) : captured,
+            true
+        );
     }
 
     @Override

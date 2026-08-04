@@ -38,7 +38,7 @@ compiler會為root、中間節點、固定literal位置與terminal節點產生mi
 
 玩家參數接受線上玩家名稱或 UUID；名稱必須由 `OnlinePlayerSnapshot` 解析，持久化資料仍只保存 UUID。不得在 command 或 completion 時進行離線玩家 lookup。
 
-`create`固定先解析world、environment與world type，再由terminal typed argument解析`--seed`及`--generator`。flags可任意排序但不可重複，completion只提供尚未使用的flag；generator候選來自主執行緒探測後發布的immutable plugin snapshot，執行階段仍在Paper global thread重新解析`plugin[:id]`。generator無效、停用、回傳null或拋出例外時必須fail closed，且持久化reference供後續managed load重新套用。
+`create`固定先解析world、environment與world type，再由terminal typed argument解析`--seed`、`--generator`、`--generator-settings`、`--no-structures`、`--generate-bonus-chest`、`--biome`、`--force-spawn-position`及`--detached`。flags可任意排序但不可重複，bonus chest與forced spawn互斥，parser/DTO必須在scheduler dispatch前拒絕衝突；completion只提供尚未使用的flag。generator與biome候選來自主執行緒探測後發布的immutable plugin snapshot，執行階段仍在Paper global thread重新解析`plugin[:id]`。provider無效、停用、回傳null或拋出例外時必須fail closed；generator與biome provider reference都持久化供後續managed load重新套用，其餘選項映射至建立時Paper `WorldCreator`或由世界資料保存。
 
 所有 command handler 必須將 domain result enum 完整映射到固定 locale key；可預期拒絕不能以exception message分類，也不能折疊成會誤導管理員的泛用failure。Brigadier custom argument只可拋固定syntax category，不得在sender-visible message附帶raw parser exception、輸入context或被拒絕token。非預期future failure只回固定backend-failure key，詳細cause僅進diagnostic/logger。
 

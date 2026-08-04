@@ -91,7 +91,9 @@ final class WorldManagementCommandSpecTest {
 
         assertEquals(List.of(
             "/wm create <world> <environment> <world-type>",
-            "/wm create <world> <environment> <world-type> [--seed <seed>] [--generator <plugin[:id]>] [--detached]"
+            "/wm create <world> <environment> <world-type> [--seed <seed>] [--generator <plugin[:id]>] "
+                + "[--generator-settings <json>] [--no-structures] [--generate-bonus-chest] "
+                + "[--biome <plugin[:id]>] [--force-spawn-position <x,y,z[,yaw,pitch]>] [--detached]"
         ), create.usageLines("wm"));
         assertEquals(List.of(
             "/wm adopt <world>",

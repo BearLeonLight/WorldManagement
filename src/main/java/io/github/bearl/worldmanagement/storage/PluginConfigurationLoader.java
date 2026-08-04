@@ -120,7 +120,7 @@ public final class PluginConfigurationLoader {
                 AuditPolicy.parse(document.getString("audit.policy", "BEST_EFFORT")),
                 document.getString("locale", "zh_TW"),
                 loadDebugConfiguration(document),
-                new HookConfiguration(loadHooks(dataDirectory)),
+                loadHooks(dataDirectory),
                 loadMigrationTargets(document),
                 loadModules(dataDirectory)
             );
@@ -154,13 +154,16 @@ public final class PluginConfigurationLoader {
         );
     }
 
-    private boolean loadHooks(final Path dataDirectory) throws IOException {
+    private HookConfiguration loadHooks(final Path dataDirectory) throws IOException {
         final Path hooksFile = dataDirectory.toAbsolutePath().normalize().resolve("hooks.yml");
         if (Files.notExists(hooksFile)) {
-            Files.writeString(hooksFile, "luckperms:\n  enabled: true\n", StandardCharsets.UTF_8);
+            Files.writeString(hooksFile, "luckperms:\n  enabled: true\nmultiverse:\n  enabled: true\n", StandardCharsets.UTF_8);
         }
         final YamlDocument hooks = YamlDocument.create(new ByteArrayInputStream(Files.readAllBytes(hooksFile)));
-        return hooks.getBoolean("luckperms.enabled", true);
+        return new HookConfiguration(
+            hooks.getBoolean("luckperms.enabled", true),
+            hooks.getBoolean("multiverse.enabled", true)
+        );
     }
 
     private Map<StorageProvider, StorageConfiguration> loadMigrationTargets(final YamlDocument document) {

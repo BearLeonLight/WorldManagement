@@ -32,7 +32,7 @@ disable-model-invocation: false
 5. 完成程式碼變更後，在環境允許時執行：
    `./gradlew.bat check`
 
-JUnit task 的硬期限為3分鐘；Paper smoke、console與player task分別為3、7、11分鐘，runner會在Gradle期限前先清理Paper子程序。任一層級逾時後先讀報告或對應log並縮小重現，不得原命令無修改重跑。
+JUnit task 與 Paper smoke 的硬期限皆為3分鐘；console/player會先以獨立3分鐘task準備Paper artifact，再以7/11分鐘執行Node runner。runner會在6/10分鐘先清理Paper子程序與輸出pipe。任一層級逾時後先讀報告或對應log並縮小重現，不得原命令無修改重跑。
 
 Paper JAR 選擇沿用 Gradle 的 `-PpaperServerJar=<path>`、`-PpaperServerSource=local|download` 與 `-PpaperDownloadChannel=STABLE|BETA|ALPHA`，不得在 skill 內重作下載或版本判斷。
 

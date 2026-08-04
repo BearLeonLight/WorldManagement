@@ -1,7 +1,9 @@
 const assert = require('node:assert/strict')
 const { spawn } = require('node:child_process')
+const { Writable } = require('node:stream')
 const test = require('node:test')
 const {
+  closeLogStream,
   createChildProcessDeadline,
   processExited,
   stopChildProcess,
@@ -30,6 +32,17 @@ test('waitForClose waits for inherited child output after the process exits', as
   await waitForClose(child, 2000, 'inherited-output fixture close')
 
   assert.equal(output, 'tail')
+})
+
+test('closeLogStream destroys a stream that cannot finish before its deadline', async () => {
+  const stream = new Writable({
+    write (_chunk, _encoding, callback) { callback() },
+    final () {}
+  })
+
+  await assert.rejects(closeLogStream(stream, 20), /Timed out waiting for E2E log stream close/)
+
+  assert.equal(stream.destroyed, true)
 })
 
 test('stopChildProcess forcibly terminates an unresponsive process within its deadline', async () => {

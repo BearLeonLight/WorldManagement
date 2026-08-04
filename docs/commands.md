@@ -32,14 +32,14 @@ Domain rejection 使用 typed status 映射至固定 locale key；例如 not man
 
 ## World Lifecycle
 
-- `/wm create <world> <NORMAL|NETHER|THE_END> <NORMAL|FLAT|AMPLIFIED|LARGE_BIOMES> [--seed <seed>] [--generator <plugin[:id]>] [--detached]`：environment與world type為必填。`--seed`、`--generator`與`--detached`可任意排序、各只能出現一次；已輸入的flag不再出現在後續completion。generator completion只讀取主執行緒更新的有效plugin名稱不可變snapshot，仍可手動輸入`plugin:id`。generator reference會寫入metadata，後續load與補償reload無法重新解析時會拒絕載入，不會退回vanilla生成器。`--detached`建立世界但不套用 Warp/Ownership/Protection 管理；世界仍可使用 `/wm load`、`/wm unload` 與 `/wm delete`。無旗標維持既有 ACTIVE 行為。
+- `/wm create <world> <NORMAL|NETHER|THE_END> <NORMAL|FLAT|AMPLIFIED|LARGE_BIOMES> [--seed <seed>] [--generator <plugin[:id]>] [--generator-settings <json>] [--no-structures] [--generate-bonus-chest] [--biome <plugin[:id]>] [--force-spawn-position <x,y,z[,yaw,pitch]>] [--detached]`：environment與world type為必填。flags可任意排序、各只能出現一次；已輸入的flag不再出現在completion。seed只接受ASCII英數，數字直接作為`long`，文字使用Minecraft相容的Java字串hash。generator settings可用引號保留含空白JSON；`--no-structures`停用結構、`--generate-bonus-chest`產生獎勵箱、`--biome`解析plugin biome provider，forced spawn可提供座標及選用yaw/pitch。bonus chest與forced spawn不可並用。generator與biome completion只讀主執行緒發布的有效plugin不可變snapshot，仍可手動輸入`plugin:id`；provider無效、停用、回傳null或拋例外時fail closed。generator與biome provider reference都會寫入metadata，供後續managed load重新解析；seed、generator settings、structures、bonus chest與forced spawn是建立時交給Paper或寫入世界資料的選項。`--detached`建立世界但不套用Warp/Ownership/Protection治理。MV的alias、game mode、difficulty、auto-load、world price與portal設定不屬於世界生成參數，因此不在此語法內。
 - `/wm load <world>`、`/wm load <world> <NORMAL|NETHER|THE_END> --detached`：既有語法載入ACTIVE或DETACHED metadata world；新語法只接受尚無metadata、未載入且具有安全storage claim的world，載入後直接保存DETACHED metadata。`--detached`缺少environment時不可執行。
 - `/wm unload <world> [fallback]`：ACTIVE/DETACHED在成功save/unload後持久化`UNLOADED` desired state；失敗時保留原intent。目前已載入但unknown的world也可執行runtime-only unload，不建立或修改metadata。卸載先以Paper `World.save(true)`顯式存檔，成功後才以`save=false`卸載。fallback可為任一不同、唯一且已載入的runtime world，identity在傳送前後都會重驗。
-- `/wm remove <world>`：將ACTIVE metadata標記為DETACHED，保留世界檔案與metadata。世界不需先卸載；已載入時玩家留在原地、runtime保持不變，僅停用Warp/Ownership/Protection與自動reconciliation。
+- `/wm remove <world>`：先要求啟用中的Multiverse-Core 5 hook解除外部追蹤並確認`worlds.yml`已保存，再將ACTIVE metadata標記為DETACHED。世界不需先卸載；已載入時玩家留在原地、runtime保持不變，僅停用Warp/Ownership/Protection與自動reconciliation。MV API或保存失敗時不改變WorldManagement metadata或runtime。
 - `/wm manage <world>`：將DETACHED metadata重新設為ACTIVE。採用目前runtime loaded/unloaded狀態作為新desired state；若identity不符則拒絕。
 - `/wm remove <world> purge confirm`：只永久清除DETACHED世界的metadata，不刪除世界檔案；effective audit policy為`STRICT`時，admission持久化失敗會拒絕purge並保留DETACHED metadata。
 - `/wm import <world> <NORMAL|NETHER|THE_END> [--detached]`：只匯入 world container 內具備 `level.dat` 的安全目錄。`--detached`第一次 durable metadata mutation即建立為DETACHED，不會先啟用治理；runtime仍依匯入流程載入，之後可用lifecycle工具操作。
-- `/wm delete <world> [fallback] confirm`：每次只刪除一個指定world。除ACTIVE/DETACHED外，目前唯一載入的unknown world會先以exact runtime identity建立`DELETE_AUTO` DETACHED metadata；adoption失敗、identity ambiguous/replaced或runtime消失時安全拒絕，不按名稱刪storage。loaded world第一次confirmed delete完成玩家搬移、save與unload；再次確認後將storage移入quarantine並以identity/version/transaction CAS持久化`DELETING`。同一runtime只回覆等待重啟；startup recovery核對exact tombstone後才永久刪除quarantine並purge metadata，包括ephemeral `DELETE_AUTO` record。若tombstone寫入期間world被外部重載，runtime會被隔離並回報需停止伺服器檢查live與quarantine資料。
+- `/wm delete <world> [fallback] confirm`：每次只刪除一個指定world。除ACTIVE/DETACHED外，目前唯一載入的unknown world會先以exact runtime identity建立`DELETE_AUTO` DETACHED metadata；adoption失敗、identity ambiguous/replaced或runtime消失時安全拒絕，不按名稱刪storage。loaded world第一次confirmed delete完成玩家搬移、save與unload；再次確認時先要求Multiverse-Core停止追蹤並持久化，再將storage移入quarantine、以identity/version/transaction CAS持久化`DELETING`、永久刪除quarantine並purge metadata，包括ephemeral `DELETE_AUTO` record。正常成功在同一runtime回覆永久刪除；只有durable tombstone後遇到shutdown才保留quarantine並回覆下次啟動接續。tombstone前失敗會還原資料；若tombstone寫入期間world被外部重載，runtime會被隔離並回報需停止伺服器檢查live與quarantine資料。
 - `/wm tp self <world> [x y z]`：將自己傳送到ACTIVE或DETACHED world spawn或指定座標。ACTIVE套用owner/rank/access治理；DETACHED只要求command permission與verified loaded identity，不套用WorldManagement治理。
 - `/wm tp player <online-player> <world> [x y z]`：傳送指定的線上玩家。
 - `/wm tp --any <world> [x y z]`：使用顯式 access bypass 進行自我傳送。
@@ -105,3 +105,9 @@ LuckPerms 為optional dependency。`hooks.yml`啟用且LuckPerms服務可用時�
 Warp設定、刪除、trust及ownership rank/access的世界參數只讀每秒更新的不可變command authorization snapshot。一般玩家只取得自己擁有的世界候選；持有對應`worldmanagement.admin.ownership.manage`或`worldmanagement.admin.warp.manage`的玩家取得所有受管世界候選。管理員專用的owner set/remove只對ownership管理員提供候選。後續rank ID與Warp名稱也沿用相同scope，未知或尚未進入snapshot的玩家回傳空候選。權限變動最多約一秒才反映在候選中，但執行階段每次都以即時permission與immutable metadata做最終授權。
 
 目前沒有設定Warp `required-permission`的管理指令；此欄位只存在於metadata/provider契約。若透過受控資料遷移或管理工具設定，查詢時仍會套用上述目的世界context規則。
+
+## Multiverse-Core 5
+
+Multiverse-Core為optional dependency。`hooks.yml`啟用且MV5 API可用時，`remove`與第二次confirmed `delete`會透過`WorldManager`及`RemoveWorldOptions`解除MV追蹤，設定`unloadBukkitWorld(false)`以保留現有Bukkit runtime，並額外確認`saveWorldsConfig()`成功，避免world在MV reload或伺服器重啟後再次載入。WorldManagement不直接修改MV的`worlds.yml`，也不使用deprecated remove overload。
+
+伺服器未安裝MV時此hook為no-op；明確停用時WorldManagement不管理MV追蹤狀態。若已安裝且hook啟用，但API連線、remove或設定保存失敗，操作會fail closed，不繼續detach、quarantine或刪除。建議讓WorldManagement成為remove/delete的唯一入口；MV的import/create、alias、game mode、difficulty、portal及其他世界政策不會雙向同步。MV remove API會同步觸發Bukkit event與保存YAML，因此必須在Paper global scheduler呼叫，可能產生第三方同步I/O延遲。

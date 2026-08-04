@@ -2,7 +2,7 @@
 
 WorldManagement 是面向 Paper 伺服器的世界管理插件，目標是提供安全的世界生命週期管理、世界內所有權與保護，以及 Warp 管理，同時避免在遊戲執行緒進行阻塞 I/O。
 
-> 專案目前提供安全的受管世界 lifecycle、world identity replacement隔離與恢復、fallback player relocation、快取式保護、Warp、owner/rank/access 管理、audit policy，以及 YAML、SQLite、MySQL/MariaDB metadata provider。LuckPerms 為可選整合；安裝且啟用時，Warp外部權限會使用目的世界context的cached permission，未安裝時安全拒絕需要此外部權限的Warp。
+> 專案目前提供安全的受管世界 lifecycle、world identity replacement隔離與恢復、fallback player relocation、快取式保護、Warp、owner/rank/access 管理、audit policy，以及 YAML、SQLite、MySQL/MariaDB metadata provider。LuckPerms 與 Multiverse-Core 5 為可選整合；LuckPerms 提供目的世界 context 的 cached Warp permission，Multiverse-Core hook 則在停止管理或永久刪除前同步解除其世界追蹤。
 
 ## 系統需求
 
@@ -17,7 +17,7 @@ WorldManagement 是面向 Paper 伺服器的世界管理插件，目標是提供
 .\gradlew.bat build
 ```
 
-自動化驗證使用有界時間預算：JUnit每個測試預設10秒且`test` task最多3分鐘；`paperJarSmokeTest`、`paperConsoleCommandTest`、`paperPlayerE2eTest`分別最多3、7、11分鐘。Paper與E2E資產下載有連線/讀取期限，Node runner會在Gradle task期限前先停止Paper並關閉log stream。逾時應視為可診斷的測試失敗，先讀取JUnit報告或下列runtime log，不應直接提高期限或無修改重跑。
+自動化驗證使用有界時間預算：JUnit每個測試預設10秒且`test` task最多3分鐘；`paperJarSmokeTest`最多3分鐘。console與player E2E會先用獨立且最多3分鐘的task準備Paper artifact，再分別以7與11分鐘執行Node runner；runner本身會在6與10分鐘先停止Paper、等待輸出pipe關閉並關閉log stream。Paper與E2E資產下載也有連線/讀取期限。逾時應視為可診斷的測試失敗，先讀取JUnit報告或下列runtime log，不應直接提高期限或無修改重跑。
 
 `clean`只會移除專案`build/`中的編譯產物、報告與隔離 Paper test server，保留可重用的 Node E2E dependencies 和 Gradle user-home downloads。需要重置這些可重建資料或釋放磁碟空間時，個別執行下列 opt-in tasks：
 
@@ -44,7 +44,7 @@ WorldManagement 是面向 Paper 伺服器的世界管理插件，目標是提供
 
 測試完整伺服器輸出會保留在 `build/paper-jar-smoke/latest.log`，供啟動失敗時檢查。一般 `check` 不會隱式下載或啟動伺服器，確保離線單元測試仍可執行。
 
-不需要玩家身分或遊戲內狀態的 Paper runtime 指令，使用獨立的控制台矩陣。此 task 不啟動 Mineflayer，也不安裝 Via；它會驗證32個console runtime leaves、68個console command outcomes、Help與巢狀錯誤導引、unknown runtime unload/delete、restart recovery、root/module aliases、world storage、metadata、identity recovery、quarantine、migration target與正常shutdown：
+不需要玩家身分或遊戲內狀態的 Paper runtime 指令，使用獨立的控制台矩陣。此 task 不啟動 Mineflayer，也不安裝 Via；它會安裝固定且SHA-256驗證的Multiverse-Core 5.7.3，驗證32個console runtime leaves、70個console command outcomes、Help與巢狀錯誤導引、unknown runtime unload/delete、同runtime永久刪除、MV remove/delete untracking與重啟持久性、root/module aliases、world storage、metadata、identity recovery、quarantine、migration target與正常shutdown。可用`-PmultiversePluginJar=<path>`覆寫MV JAR：
 
 ```powershell
 .\gradlew.bat paperConsoleCommandTest
@@ -77,9 +77,13 @@ Paper JAR 選擇參數與 `paperJarSmokeTest` 相同。Via fallback 預設動態
 ```text
 /wm create survival NORMAL NORMAL
 /wm create terrain NORMAL NORMAL --generator Terra:normal --seed 8675309
+/wm create void-events NORMAL FLAT --generator Terra:void --generator-settings '{"preset":"events"}' --no-structures --biome Terra:climate --force-spawn-position 0,80,0,90,0
+/wm create starter NORMAL NORMAL --generate-bonus-chest
 /wm display-name set survival <green>生存世界</green>
 /wm tp self survival
 ```
+
+create flags可任意排序且不得重複。`--generate-bonus-chest`與`--force-spawn-position`互斥；generator/biome provider無法由啟用中的插件解析時會安全拒絕，不會退回vanilla provider。generator與biome provider reference會保存至metadata，供後續managed load重新解析；其餘選項是交給Paper的建立時資料。MV的alias、game mode、difficulty、auto-load、world price與portal設定不屬於世界生成輸入，不由此指令模擬。
 
 將已由Paper或其他世界工具載入的世界納入管理，以及將磁碟上具備`level.dat`的安全世界目錄匯入：
 
@@ -109,7 +113,7 @@ Paper JAR 選擇參數與 `paperJarSmokeTest` 相同。Via fallback 預設動態
 
 `unload`與`delete`的world completion會列出ACTIVE、DETACHED及目前唯一載入的unknown world；每次指令仍只操作一個指定世界，不是批次刪除。unknown loaded world執行unload時不建立metadata；執行delete時會先從exact runtime identity建立`DELETE_AUTO` DETACHED metadata，再走相同的安全刪除流程。
 
-對仍載入的世界執行`delete`時，第一次會搬離玩家、存檔並卸載；管理員確認狀態後必須再次執行相同指令。第二次會將storage移入quarantine並寫入`DELETING` tombstone，永久刪除由下一次啟動recovery完成：
+對仍載入的世界執行`delete`時，第一次會搬離玩家、存檔並卸載；管理員確認狀態後必須再次執行相同指令。第二次會先要求Multiverse-Core停止追蹤，接著將storage移入quarantine、寫入`DELETING` tombstone，並在同一runtime永久刪除storage與metadata。若plugin已進入shutdown，durable tombstone與quarantine會保留，由下一次啟動recovery接續：
 
 ```text
 /wm delete survival world confirm
@@ -129,7 +133,7 @@ Paper JAR 選擇參數與 `paperJarSmokeTest` 相同。Via fallback 預設動態
 
 ## 啟動診斷
 
-WorldManagement 在 `INFO` 層級輸出精簡的啟動階段摘要：設定與 storage、metadata 數量、啟用模組與可選 LuckPerms capability，以及總啟動耗時。例如：
+WorldManagement 在 `INFO` 層級輸出精簡的啟動階段摘要：設定與 storage、metadata 數量、啟用模組與可選 hook capability，以及總啟動耗時。例如：
 
 ```text
 [WorldManagement] Enabling WorldManagement 0.1.0...
@@ -154,6 +158,7 @@ WorldManagement 在 `INFO` 層級輸出精簡的啟動階段摘要：設定與 s
 [WorldManagement]     Initializing hooks and services...
 [WorldManagement]     Hooks
 [WorldManagement]         LuckPerms: available
+[WorldManagement]         Multiverse-Core: available
 [WorldManagement]     Services
 [WorldManagement]         Command service: /wm Brigadier tree initialized
 [WorldManagement]         Suggestion service: metadata and online-player snapshots initialized
@@ -180,7 +185,7 @@ WorldManagement 在 `INFO` 層級輸出精簡的啟動階段摘要：設定與 s
 - 世界 owner、rank、access-control 與快取式互動保護
 - 公開/私有 Warp 與線上玩家名稱或 UUID trust（metadata 一律保存 UUID）
 - 同一世界 lifecycle state gate、fallback world 驗證與 entity-affine 非同步玩家傳送
-- metadata-first desired state、啟動/外部載入 bounded reconciliation、顯式存檔後卸載、unknown loaded runtime unload/delete、已載入世界的兩階段 delete confirm、nonblocking delete delay、transaction-bound `DELETING` tombstone、atomic quarantine/restore、restart-finalized permanent delete、crash recovery 與 external reload abort
+- metadata-first desired state、啟動/外部載入 bounded reconciliation、顯式存檔後卸載、unknown loaded runtime unload/delete、已載入世界的兩階段 delete confirm、nonblocking delete delay、transaction-bound `DELETING` tombstone、atomic quarantine/restore、同runtime permanent delete、shutdown/crash recovery 與 external reload abort
 - YAML、SQLite、MySQL/MariaDB metadata provider，且永遠只有一個有效 provider；SQL 使用 HikariCP
 - YAML atomic write、備份、毀損隔離；JSONL rotation 或 SQL audit store
 - SQL metadata mutation 與其成功 audit event 使用同一 JDBC transaction；YAML provider 保持 metadata 原子檔案寫入後的非阻塞 JSONL audit
@@ -193,6 +198,7 @@ WorldManagement 在 `INFO` 層級輸出精簡的啟動階段摘要：設定與 s
 - bounded單一I/O worker、migration期間metadata mutation freeze/target rollback，以及不阻塞Paper thread的event-driven shutdown；未提交的teleport會立即拒絕，已提交的`teleportAsync`會與指令結果分離並持續drain到底層Paper future完成；同步shutdown admission失敗不會跳過terminal resource close。terminal resource close由有硬上限的受管daemon worker逐項隔離，既有I/O或close忽略interrupt時仍會嘗試後續資源，逾時future會明確失敗
 - WorldManagement 專用 `OFF/BASIC/VERBOSE` 診斷、area allowlist、Paper console 與 bounded rotating file sink
 - 可選 LuckPerms Warp外部權限整合；以已載入且identity相符的目的Bukkit world建立cached permission context，玩家名稱仍只由線上快照解析，WorldManagement rank不映射為LuckPerms group
+- 可選 Multiverse-Core 5 lifecycle整合；`remove`與第二次confirmed `delete`在改變WorldManagement狀態前使用MV公開API解除追蹤、保留Bukkit runtime並驗證`worlds.yml`持久化，失敗時fail closed
 - `messages_zh_TW.yml` 使用 Adventure MiniMessage，集中管理全部指令回覆、可選共用前綴與逐語意訊息 key
 - 玩家與 RCON 接收 Adventure Component；本機控制台以固定 ANSI 16 色呈現啟動摘要與指令回覆，Paper 檔案 log 保持純文字
 - 自訂 locale 缺少的 key 會從 JAR 內建 template 自動補入並保存；無效 key 只在執行時回退，不覆寫管理員內容
@@ -206,7 +212,7 @@ MySQL/MariaDB 的 adapter 可使用 [設定與 metadata](docs/configuration.md) 
 
 ## 外部世界工具
 
-WorldManagement 的治理功能只套用於明確登錄的ACTIVE世界。`/wm adopt <world>`只會為已載入世界建立本插件的metadata；不改變地圖檔、載入狀態或Multiverse等外部工具設定。唯一載入的unknown world可執行runtime-only unload，或在confirmed delete時先以exact identity建立DELETE_AUTO DETACHED metadata後進入安全刪除流程；除此之外，未登錄世界不套用保護、Warp或其他metadata操作。
+WorldManagement 的治理功能只套用於明確登錄的ACTIVE世界。`/wm adopt <world>`只會為已載入世界建立本插件的metadata；不改變地圖檔、載入狀態或Multiverse等外部工具設定。啟用Multiverse-Core hook後，`/wm remove <world>`與第二次confirmed delete會在WorldManagement mutation前透過MV5公開API解除追蹤並確認`worlds.yml`已保存，避免MV在之後reload或重啟時重新載入該世界；API或保存失敗時不會繼續detach、quarantine或刪除。唯一載入的unknown world可執行runtime-only unload，或在confirmed delete時先以exact identity建立DELETE_AUTO DETACHED metadata後進入安全刪除流程；除此之外，未登錄世界不套用保護、Warp或其他metadata操作。
 
 ## 文件
 

@@ -17,8 +17,8 @@ public interface WorldRuntimeGateway {
 
     default LifecycleWorld create(final WorldCreationRequest request) {
         final WorldCreationRequest required = Objects.requireNonNull(request, "request");
-        if (required.generator().isPresent()) {
-            throw new UnsupportedOperationException("This runtime gateway does not support custom generators.");
+        if (required.generator().isPresent() || required.biomeProvider().isPresent()) {
+            throw new UnsupportedOperationException("This runtime gateway does not support custom world providers.");
         }
         return create(
             required.worldName(),
@@ -47,6 +47,16 @@ public interface WorldRuntimeGateway {
     ) {
         Objects.requireNonNull(environment, "environment");
         return load(claim, generator);
+    }
+
+    default LoadResult load(
+        final WorldStorageGateway.LoadClaim claim,
+        final WorldEnvironment environment,
+        final Optional<WorldGeneratorReference> generator,
+        final Optional<WorldGeneratorReference> biomeProvider
+    ) {
+        Objects.requireNonNull(biomeProvider, "biomeProvider");
+        return biomeProvider.isPresent() ? LoadResult.failed() : load(claim, environment, generator);
     }
 
     boolean unload(LifecycleWorld world, boolean save);

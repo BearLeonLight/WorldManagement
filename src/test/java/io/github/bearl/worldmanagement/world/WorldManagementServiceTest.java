@@ -447,6 +447,33 @@ final class WorldManagementServiceTest {
     }
 
     @Test
+    void keepsManagedCapabilityForPersistedBiomeProviderWorld() {
+        final PluginIoExecutor executor = new PluginIoExecutor("WorldManagementTest");
+        try {
+            final InMemoryWorldMetadataRepository repository = new InMemoryWorldMetadataRepository();
+            final WorldIdentitySnapshot identity = identity("11111111-1111-1111-1111-111111111111", 42L);
+            repository.create(WorldMetadata.createDefault(
+                "creative", identity, LifecycleCapability.MANAGED, Optional.of(RequestedWorldType.NORMAL),
+                Optional.empty(), Optional.of(WorldGeneratorReference.parse("Terra:climate")), true
+            ));
+            final WorldManagementService service = new WorldManagementService(executor, repository, new WorldRegistry());
+            service.load().join();
+
+            final WorldMetadata classified = service.classifyLoadedIdentity(
+                identity, LifecycleCapability.EXTERNAL_ONLY
+            ).join().metadata();
+
+            assertEquals(LifecycleCapability.MANAGED, classified.lifecycleCapability());
+            assertEquals(classified, repository.find("creative").orElseThrow());
+            assertEquals(WorldRuntimeResolution.Status.VERIFIED, service.resolveRuntimeWorld(
+                identity, LifecycleCapability.EXTERNAL_ONLY
+            ).status());
+        } finally {
+            executor.shutdown(Duration.ofSeconds(1));
+        }
+    }
+
+    @Test
     void keepsVerifiedRegistrySnapshotWhenIdentityPersistenceFails() {
         final PluginIoExecutor executor = new PluginIoExecutor("WorldManagementTest");
         try {

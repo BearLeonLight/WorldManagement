@@ -16,7 +16,12 @@ const { resolveCheckedArtifact } = require('./via-artifacts.cjs')
 const { literalChildren, literalChildrenAt } = require('./command-tree.cjs')
 const { assertCommandMatchesPath, assertRuntimeCoverage } = require('../../runtime-coverage.cjs')
 const { resolveBuildChild } = require('../../build-child-path.cjs')
-const { closeLogStream, createChildProcessDeadline, stopChildProcess } = require('../../process-control.cjs')
+const {
+  closeLogStream,
+  createChildProcessDeadline,
+  stopChildProcess,
+  waitForClose
+} = require('../../process-control.cjs')
 const { createOutputMonitor } = require('./output-monitor.cjs')
 
 const BOT_NAME = 'WmLifecycleE2E'
@@ -365,16 +370,10 @@ async function runPlayerFlow (attempt, clientVersion) {
     assert.equal(autoDeleteDetached['registration-source'], 'DELETE_AUTO')
     await command(
       bot, `/wm delete runtimefallback ${OVERWORLD_ID} confirm`,
-      '將於下次伺服器啟動時完成刪除', 'unknown runtime delete pending restart',
+      '世界 runtimefallback 已永久刪除', 'unknown runtime permanent delete',
       'wm delete <world> <fallback> confirm'
     )
-    const autoDeleteDeleting = readWorldMetadata(attempt, 'runtimefallback')
-    assert.equal(autoDeleteDeleting['management-state'], 'DELETING')
-    assert.equal(autoDeleteDeleting['registration-source'], 'DELETE_AUTO')
-    assert.match(
-      autoDeleteDeleting.deletion?.['transaction-id'],
-      /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i
-    )
+    assertDeletedWorldAbsent(attempt, 'runtimefallback')
 
     bot.chat(`/tp ${BOT_NAME} 40 90 40`)
     await waitForPosition(bot, { x: 40, y: 90, z: 40 }, 'self teleport setup')
@@ -432,18 +431,8 @@ async function runPlayerFlow (attempt, clientVersion) {
     await command(bot, `/wm delete deletiontarget ${OVERWORLD_ID} confirm`, '已完成存檔並卸載', 'delete fallback unload confirmation', 'wm delete <world> <fallback> confirm')
     await assertPlayerWorld(attempt, bot, 'minecraft:overworld', 'delete fallback world')
     await waitUntilMovedFrom(bot, deleteSourcePosition, 'delete fallback relocation')
-    await command(bot, `/wm delete deletiontarget ${OVERWORLD_ID} confirm`, '將於下次伺服器啟動時完成刪除', 'delete fallback pending restart', 'wm delete <world> <fallback> confirm')
-    const metadataPath = path.join(attempt.serverDirectory, 'plugins', 'WorldManagement', 'worlds', 'deletiontarget.yml')
-    const deletingMetadata = YAML.parse(fs.readFileSync(metadataPath, 'utf8'))
-    assert.equal(deletingMetadata['management-state'], 'DELETING')
-    assert.match(
-      deletingMetadata.deletion?.['transaction-id'],
-      /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i
-    )
-    assert.ok(
-      findDirectories(attempt.serverDirectory, '.worldmanagement-quarantine').length > 0,
-      'Pending player fallback delete did not retain a quarantine claim.'
-    )
+    await command(bot, `/wm delete deletiontarget ${OVERWORLD_ID} confirm`, '世界 deletiontarget 已永久刪除', 'delete fallback permanent delete', 'wm delete <world> <fallback> confirm')
+    assertDeletedWorldAbsent(attempt, 'deletiontarget')
 
     await command(bot, '/wm ownership access teleporttarget mode NONE', '世界存取設定已更新', 'open LuckPerms destination world', 'wm ownership access <world> <operation> <value>')
     await command(bot, '/wm tp self teleporttarget 60 90 60', '已傳送至世界 teleporttarget', 'enter LuckPerms warp destination', 'wm tp self <world> <x> <y> <z>')
@@ -470,14 +459,14 @@ async function runPlayerFlow (attempt, clientVersion) {
         attempt.serverDirectory, 'plugins', 'WorldManagement', 'worlds', 'deletiontarget.yml'
       )),
       false,
-      'Startup recovery left managed deletion metadata behind.'
+      'Restart recreated managed deletion metadata.'
     )
     assert.equal(
       fs.existsSync(path.join(
         attempt.serverDirectory, 'plugins', 'WorldManagement', 'worlds', 'runtimefallback.yml'
       )),
       false,
-      'Startup recovery left DELETE_AUTO metadata behind.'
+      'Restart recreated DELETE_AUTO metadata.'
     )
     assert.equal(
       findDirectories(attempt.serverDirectory, '.worldmanagement-quarantine').some(directory =>
@@ -974,6 +963,7 @@ async function stopPaperAttempt (attempt) {
   const shutdownStart = fs.existsSync(logPath) ? fs.readFileSync(logPath, 'utf8').length : 0
   try {
     await stopChildProcess(paper, `${attempt.mode} Paper`)
+    await waitForClose(paper, 5000, `${attempt.mode} Paper output close`)
   } finally {
     activePaperProcesses.delete(paper)
     await closeLogStream(logFile)
@@ -1058,6 +1048,31 @@ function readWorldMetadata (attempt, worldId) {
     'plugins', 'WorldManagement', 'worlds', `${worldId}.yml`
   )
   return YAML.parse(fs.readFileSync(metadataPath, 'utf8'))
+}
+
+function assertDeletedWorldAbsent (attempt, worldId) {
+  assert.equal(
+    fs.existsSync(path.join(
+      attempt.serverDirectory, 'plugins', 'WorldManagement', 'worlds', `${worldId}.yml`
+    )),
+    false,
+    `Permanent delete left ${worldId} metadata behind.`
+  )
+  assert.equal(
+    [
+      path.join(attempt.serverDirectory, 'world', 'dimensions', 'minecraft', worldId),
+      path.join(attempt.serverDirectory, worldId)
+    ].some(candidate => fs.existsSync(candidate)),
+    false,
+    `Permanent delete left ${worldId} storage behind.`
+  )
+  assert.equal(
+    findDirectories(attempt.serverDirectory, '.worldmanagement-quarantine').some(directory =>
+      fs.readdirSync(directory).length > 0
+    ),
+    false,
+    `Permanent delete left a quarantine claim for ${worldId}.`
+  )
 }
 
 function setWarpRequiredPermission (attempt, worldId, warpName, permission) {

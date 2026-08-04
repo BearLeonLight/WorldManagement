@@ -158,9 +158,20 @@ SQLite 已由測試驗證。MySQL/MariaDB 使用相同 JDBC adapter，需在目�
 
 `ownership.maximum-custom-ranks` 會限制每個世界可建立的自訂 rank 數；系統 `OWNER` 與 `GUEST` 不計入限制。`warp.enabled: false` 會停用 `/wm warp`，既有 metadata 不會被刪除。
 
-`lifecycle.fallback-world` 可選擇一個啟動時唯一載入的runtime world，不要求WorldManagement metadata；名稱未載入或ambiguous會使WorldManagement fail-closed停用。`unload`/`delete`也可指定任一不同且唯一載入的fallback，並在玩家傳送完成後重驗pinned identity。save失敗會保留loaded world；Paper未提供可供plugin等待的async world-save completion。已載入世界的confirmed delete第一次只完成save/unload；再次confirmed delete會移入quarantine並留下transaction-bound `DELETING` tombstone，同一runtime不永久刪除。下一次啟動recovery核對identity/version/transaction後才刪除quarantine並purge metadata。`deletion-delay-milliseconds`由global scheduler計時，不占用I/O worker；tombstone前若世界被外部重新載入或mutation失敗，刪除會中止並還原可恢復資料。
+`lifecycle.fallback-world` 可選擇一個啟動時唯一載入的runtime world，不要求WorldManagement metadata；名稱未載入或ambiguous會使WorldManagement fail-closed停用。`unload`/`delete`也可指定任一不同且唯一載入的fallback，並在玩家傳送完成後重驗pinned identity。save失敗會保留loaded world；Paper未提供可供plugin等待的async world-save completion。已載入世界的confirmed delete第一次只完成save/unload；再次confirmed delete會移入quarantine、留下transaction-bound `DELETING` tombstone，接著在同一runtime刪除quarantine並purge metadata。只有durable tombstone後遇到shutdown時才保留claim，由下一次啟動recovery核對identity/version/transaction後接續。`deletion-delay-milliseconds`由global scheduler計時，不占用I/O worker；tombstone前若世界被外部重新載入或mutation失敗，刪除會中止並還原可恢復資料。
 
-首次啟動會建立 `hooks.yml` 與 `messages_zh_TW.yml`。`hooks.yml`的`luckperms.enabled`控制optional LuckPerms API整合。服務可用時，Warp `required-permission`使用目的Bukkit world context的LuckPerms cached permission；服務缺失、停用或查詢失敗時，非空外部permission會fail closed。一般command permission與protection bypass仍由Paper/Bukkit判斷。`locale`決定使用的`messages_<locale>.yml`。
+首次啟動會建立 `hooks.yml` 與 `messages_zh_TW.yml`。`hooks.yml`提供以下獨立開關：
+
+```yaml
+luckperms:
+  enabled: true
+multiverse:
+  enabled: true
+```
+
+`luckperms.enabled`控制optional LuckPerms API整合。服務可用時，Warp `required-permission`使用目的Bukkit world context的LuckPerms cached permission；服務缺失、停用或查詢失敗時，非空外部permission會fail closed。一般command permission與protection bypass仍由Paper/Bukkit判斷。
+
+`multiverse.enabled`控制optional Multiverse-Core 5 lifecycle整合。未安裝MV時不影響操作；明確停用時WorldManagement不會解除MV追蹤，管理員必須自行避免MV重新載入。啟用且MV已安裝時，`remove`與第二次confirmed `delete`會先使用MV公開API移除world、保留Bukkit runtime並確認`worlds.yml`保存；API unavailable、remove或save失敗會fail closed。該MV API同步觸發Bukkit event與YAML保存，依thread affinity必須在Paper global scheduler執行，是已知的第三方同步I/O限制。`locale`決定使用的`messages_<locale>.yml`。
 
 ## MiniMessage 訊息
 

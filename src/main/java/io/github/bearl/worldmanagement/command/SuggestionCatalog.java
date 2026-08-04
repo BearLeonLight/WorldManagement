@@ -38,6 +38,7 @@ public final class SuggestionCatalog {
 
     private final AtomicReference<WorldManagementService> service = new AtomicReference<>();
     private final AtomicReference<List<String>> generatorPlugins = new AtomicReference<>(List.of());
+    private final AtomicReference<List<String>> biomeProviderPlugins = new AtomicReference<>(List.of());
     private final OnlinePlayerSnapshot players;
     private final CommandAuthorizationSnapshot authorizations;
     private final AtomicReference<LoadedWorldCatalog> loadedWorlds;
@@ -221,16 +222,28 @@ public final class SuggestionCatalog {
     }
 
     public void replaceGeneratorPlugins(final Collection<String> plugins) {
-        generatorPlugins.set(Objects.requireNonNull(plugins, "plugins").stream()
-            .map(plugin -> Objects.requireNonNull(plugin, "plugin"))
-            .filter(plugin -> !plugin.isBlank())
-            .distinct()
-            .sorted(String.CASE_INSENSITIVE_ORDER)
-            .toList());
+        generatorPlugins.set(normalizePluginNames(plugins));
     }
 
     public Collection<String> generatorPlugins() {
         return generatorPlugins.get();
+    }
+
+    public void replaceBiomeProviderPlugins(final Collection<String> plugins) {
+        biomeProviderPlugins.set(normalizePluginNames(plugins));
+    }
+
+    public Collection<String> biomeProviderPlugins() {
+        return biomeProviderPlugins.get();
+    }
+
+    private static List<String> normalizePluginNames(final Collection<String> plugins) {
+        return Objects.requireNonNull(plugins, "plugins").stream()
+            .map(plugin -> Objects.requireNonNull(plugin, "plugin"))
+            .filter(plugin -> !plugin.isBlank())
+            .distinct()
+            .sorted(String.CASE_INSENSITIVE_ORDER)
+            .toList();
     }
 
     private boolean canManage(

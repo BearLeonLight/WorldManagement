@@ -15,6 +15,12 @@ plugins {
 group = providers.gradleProperty("group").get()
 version = providers.gradleProperty("version").get()
 
+val multiverseE2eRuntime by configurations.creating {
+    isCanBeConsumed = false
+    isCanBeResolved = true
+    isTransitive = false
+}
+
 data class PaperDownload(val name: String, val url: String, val sha256: String)
 
 val downloadConnectTimeoutMillis = 15_000
@@ -144,8 +150,28 @@ fun org.gradle.api.tasks.Exec.configureLuckPermsEnvironment() {
     )
 }
 
+fun org.gradle.api.tasks.Exec.configureMultiverseEnvironment() {
+    project.providers.gradleProperty("multiversePluginJar").orNull?.let { configured ->
+        val jar = project.file(configured)
+        if (!jar.isFile) {
+            throw GradleException("Multiverse-Core plugin JAR does not exist: ${jar.absolutePath}")
+        }
+        environment("WM_MULTIVERSE_PLUGIN_JAR", jar.absolutePath)
+    } ?: multiverseE2eRuntime.singleFile.also { jar ->
+        val expectedChecksum = "c91a7c2c25ad7d878257b08c980381e8b5ffba8df63faf402242bfb56a058884"
+        val actualChecksum = sha256(jar)
+        if (!actualChecksum.equals(expectedChecksum, ignoreCase = true)) {
+            throw GradleException(
+                "Multiverse-Core 5.7.3 JAR SHA-256 mismatch: expected $expectedChecksum, got $actualChecksum."
+            )
+        }
+        environment("WM_MULTIVERSE_PLUGIN_JAR", jar.absolutePath)
+    }
+}
+
 repositories {
     maven("https://repo.papermc.io/repository/maven-public/")
+    maven("https://repo.onarandombox.com/multiverse-releases")
     mavenCentral()
 }
 
@@ -165,6 +191,8 @@ dependencies {
     implementation("com.zaxxer:HikariCP:${providers.gradleProperty("hikariVersion").get()}")
     compileOnly("net.luckperms:api:${providers.gradleProperty("luckPermsApiVersion").get()}")
     testImplementation("net.luckperms:api:${providers.gradleProperty("luckPermsApiVersion").get()}")
+    compileOnly("org.mvplugins.multiverse.core:multiverse-core:${providers.gradleProperty("multiverseCoreVersion").get()}")
+    multiverseE2eRuntime("org.mvplugins.multiverse.core:multiverse-core:${providers.gradleProperty("multiverseCoreVersion").get()}")
     compileOnly("net.kyori:adventure-text-serializer-ansi:5.2.0")
     compileOnly("net.kyori:ansi:1.1.1")
     testRuntimeOnly("net.kyori:adventure-text-serializer-ansi:5.2.0")
@@ -426,7 +454,16 @@ tasks {
             } finally {
                 if (process.isAlive) {
                     process.destroyForcibly()
-                    process.waitFor(10, TimeUnit.SECONDS)
+                    val interrupted = Thread.interrupted()
+                    try {
+                        if (!process.waitFor(10, TimeUnit.SECONDS)) {
+                            throw GradleException("Paper JAR smoke test process survived forced termination. See ${logFile.absolutePath}")
+                        }
+                    } finally {
+                        if (interrupted) {
+                            Thread.currentThread().interrupt()
+                        }
+                    }
                 }
             }
         }
@@ -484,36 +521,53 @@ tasks {
         timeout.set(Duration.ofMinutes(1))
     }
 
+    val preparedPaperServerJar = objects.fileProperty()
+    val preparePaperE2eServerJar = register("preparePaperE2eServerJar") {
+        group = "verification"
+        description = "Resolves the checksum-verified Paper server JAR before starting an E2E runner."
+        timeout.set(Duration.ofMinutes(3))
+        doLast {
+            preparedPaperServerJar.set(resolvePaperServerJar())
+        }
+    }
+
     register<Exec>("paperConsoleCommandTest") {
         group = "verification"
         description = "Runs the Paper console command matrix without starting a Mineflayer player client."
-        dependsOn(shadowJar, e2eSupportJar, "commandRuntimeHarnessTest", "installConsoleE2eDependencies")
+        dependsOn(
+            shadowJar, e2eSupportJar, "commandRuntimeHarnessTest",
+            "installConsoleE2eDependencies", preparePaperE2eServerJar
+        )
         workingDir(layout.projectDirectory)
         commandLine("node", "e2e/console/test/console-command-test.cjs")
         timeout.set(Duration.ofMinutes(7))
         doFirst {
             val javaExecutable = File(System.getProperty("java.home"), "bin/java.exe")
                 .takeIf(File::isFile) ?: File(System.getProperty("java.home"), "bin/java")
-            environment("WM_PAPER_JAR", resolvePaperServerJar().absolutePath)
+            environment("WM_PAPER_JAR", preparedPaperServerJar.get().asFile.absolutePath)
             environment("WM_PLUGIN_JAR", shadowJar.get().archiveFile.get().asFile.absolutePath)
             environment("WM_E2E_SUPPORT_JAR", e2eSupportJar.get().archiveFile.get().asFile.absolutePath)
             environment("WM_JAVA_EXECUTABLE", javaExecutable.absolutePath)
             environment("WM_CONSOLE_TEST_SERVER_DIR", layout.buildDirectory.dir("console-command-test").get().asFile.absolutePath)
             configureLuckPermsEnvironment()
+            configureMultiverseEnvironment()
         }
     }
 
     register<Exec>("paperPlayerE2eTest") {
         group = "verification"
         description = "Runs the optional Mineflayer player-side black-box test against an isolated Paper server."
-        dependsOn(shadowJar, e2eSupportJar, "commandRuntimeHarnessTest", "playerE2eStrategyTest")
+        dependsOn(
+            shadowJar, e2eSupportJar, "commandRuntimeHarnessTest",
+            "playerE2eStrategyTest", preparePaperE2eServerJar
+        )
         workingDir(layout.projectDirectory)
         commandLine("node", "e2e/player/test/player-smoke.cjs")
         timeout.set(Duration.ofMinutes(11))
         doFirst {
             val javaExecutable = File(System.getProperty("java.home"), "bin/java.exe")
                 .takeIf(File::isFile) ?: File(System.getProperty("java.home"), "bin/java")
-            environment("WM_PAPER_JAR", resolvePaperServerJar().absolutePath)
+            environment("WM_PAPER_JAR", preparedPaperServerJar.get().asFile.absolutePath)
             environment("WM_PLUGIN_JAR", shadowJar.get().archiveFile.get().asFile.absolutePath)
             environment("WM_E2E_SUPPORT_JAR", e2eSupportJar.get().archiveFile.get().asFile.absolutePath)
             environment("WM_JAVA_EXECUTABLE", javaExecutable.absolutePath)

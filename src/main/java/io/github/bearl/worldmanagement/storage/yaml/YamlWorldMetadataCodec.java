@@ -35,7 +35,7 @@ import java.util.UUID;
 /** Maps typed world metadata to and from a single BoostedYAML document. */
 public final class YamlWorldMetadataCodec implements WorldMetadataCodec {
 
-    public static final int CURRENT_SCHEMA_VERSION = 4;
+    public static final int CURRENT_SCHEMA_VERSION = 5;
 
     private static final String NONE = "NONE";
     private final DisplayNameValidator displayNameValidator = new DisplayNameValidator();
@@ -57,6 +57,11 @@ public final class YamlWorldMetadataCodec implements WorldMetadataCodec {
             metadata.generator().ifPresent(generator -> {
                 document.set("creation.generator.plugin", generator.pluginName());
                 document.set("creation.generator.id", generator.id());
+            });
+            document.set("creation.biome-provider.present", metadata.biomeProvider().isPresent());
+            metadata.biomeProvider().ifPresent(provider -> {
+                document.set("creation.biome-provider.plugin", provider.pluginName());
+                document.set("creation.biome-provider.id", provider.id());
             });
             document.set("management-state", metadata.managementState().name());
             document.set(
@@ -119,6 +124,9 @@ public final class YamlWorldMetadataCodec implements WorldMetadataCodec {
             final Optional<WorldGeneratorReference> generator = schemaVersion >= 2
                 ? parseGenerator(document)
                 : Optional.empty();
+            final Optional<WorldGeneratorReference> biomeProvider = schemaVersion >= 5
+                ? parseProvider(document, "creation.biome-provider")
+                : Optional.empty();
             return new WorldMetadata(
                 worldName,
                 displayName,
@@ -130,6 +138,7 @@ public final class YamlWorldMetadataCodec implements WorldMetadataCodec {
                     ? Optional.empty()
                     : Optional.of(RequestedWorldType.valueOf(requestedWorldType)),
                 generator,
+                biomeProvider,
                 WorldManagementState.valueOf(requireString(document, "management-state")),
                 WorldLoadState.valueOf(requireString(document, "desired-state")),
                 requireString(document, "owner"),
@@ -183,13 +192,20 @@ public final class YamlWorldMetadataCodec implements WorldMetadataCodec {
     }
 
     private static Optional<WorldGeneratorReference> parseGenerator(final YamlDocument document) {
-        if (!requireBoolean(document, "creation.generator.present")) {
+        return parseProvider(document, "creation.generator");
+    }
+
+    private static Optional<WorldGeneratorReference> parseProvider(
+        final YamlDocument document,
+        final String route
+    ) {
+        if (!requireBoolean(document, route + ".present")) {
             return Optional.empty();
         }
-        final String pluginName = requireString(document, "creation.generator.plugin");
-        final String id = document.getString("creation.generator.id", null);
+        final String pluginName = requireString(document, route + ".plugin");
+        final String id = document.getString(route + ".id", null);
         if (id == null) {
-            throw new IllegalArgumentException("Missing YAML string: creation.generator.id");
+            throw new IllegalArgumentException("Missing YAML string: " + route + ".id");
         }
         return Optional.of(new WorldGeneratorReference(pluginName, id));
     }

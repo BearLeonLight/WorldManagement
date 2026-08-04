@@ -296,6 +296,11 @@ public final class WorldManagementCommand {
                     type,
                     options.seed(),
                     options.generator().map(io.github.bearl.worldmanagement.world.WorldGeneratorReference::parse),
+                    options.generatorSettings(),
+                    options.generateStructures(),
+                    options.bonusChest(),
+                    options.biomeProvider().map(io.github.bearl.worldmanagement.world.WorldGeneratorReference::parse),
+                    options.forcedSpawnPosition(),
                     options.detached()
                 ),
                 event
@@ -622,6 +627,7 @@ public final class WorldManagementCommand {
                 final String key = switch (result.status()) {
                     case DELETED -> "command.delete.success";
                     case PENDING_RESTART -> "command.delete.pending-restart";
+                    case TRACKING_REMOVAL_FAILED -> "command.delete.tracking-removal-failed";
                     case UNLOADED_REQUIRES_CONFIRMATION -> "command.delete.unloaded-requires-confirmation";
                     case RELOADED -> "command.delete.reloaded";
                     case RELOADED_AFTER_TOMBSTONE -> "command.delete.reloaded-after-tombstone";
@@ -878,6 +884,7 @@ public final class WorldManagementCommand {
     static String removeResultKey(final WorldLifecycleCoordinator.RemoveStatus status) {
         return switch (status) {
             case DETACHED -> "command.remove.success";
+            case TRACKING_REMOVAL_FAILED -> "command.remove.tracking-removal-failed";
             case NOT_MANAGED -> "command.remove.not-managed";
             case NOT_READY -> "command.loading";
             case OPERATION_IN_PROGRESS -> "command.remove.operation-in-progress";

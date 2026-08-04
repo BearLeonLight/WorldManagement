@@ -17,6 +17,8 @@ import io.github.bearl.worldmanagement.core.DiagnosticPrivacy;
 import io.github.bearl.worldmanagement.config.DebugArea;
 import io.github.bearl.worldmanagement.config.DebugLevel;
 import io.github.bearl.worldmanagement.hook.LuckPermsHook;
+import io.github.bearl.worldmanagement.hook.MultiverseWorldTrackingHook;
+import io.github.bearl.worldmanagement.hook.WorldTrackingHook;
 import io.github.bearl.worldmanagement.command.WorldManagementCommand;
 import io.github.bearl.worldmanagement.command.BrigadierWorldManagementCommand;
 import io.github.bearl.worldmanagement.command.CommandAuthorizationSnapshot;
@@ -339,7 +341,8 @@ public final class WorldManagementPlugin extends JavaPlugin {
         final WorldGeneratorCatalog generatorCatalog = new WorldGeneratorCatalog(
             getServer().getPluginManager(),
             getLogger()::warning,
-            commandComposition.suggestions()::replaceGeneratorPlugins
+            commandComposition.suggestions()::replaceGeneratorPlugins,
+            commandComposition.suggestions()::replaceBiomeProviderPlugins
         );
         generatorCatalog.refresh("worldmanagement-generator-probe");
         getServer().getPluginManager().registerEvents(generatorCatalog, this);
@@ -359,7 +362,8 @@ public final class WorldManagementPlugin extends JavaPlugin {
         }
         final ConfigService configService = new ConfigService(configuration);
         final LuckPermsHook luckPermsHook = LuckPermsHook.detect(configuration.hooks().luckPermsEnabled());
-        logHooks(configuration, luckPermsHook);
+        final MultiverseHookConnection multiverseHook = connectMultiverseHook(configuration);
+        logHooks(configuration, luckPermsHook, multiverseHook.status());
         final DestinationWorldPermissionResolver destinationPermissions = new DestinationWorldPermissionResolver(
             loadedWorldCatalog,
             luckPermsHook.cachedPermissions()
@@ -376,6 +380,7 @@ public final class WorldManagementPlugin extends JavaPlugin {
             configuration.deletionDelay(),
             threadDispatcher,
             configuration.fallbackWorld(),
+            multiverseHook.hook(),
             diagnostics
         );
         final WorldManagementCommand commandHandler = new WorldManagementCommand(
@@ -721,15 +726,38 @@ public final class WorldManagementPlugin extends JavaPlugin {
         }
     }
 
-    private void logHooks(final PluginConfiguration configuration, final LuckPermsHook luckPermsHook) {
+    private MultiverseHookConnection connectMultiverseHook(final PluginConfiguration configuration) {
+        if (!configuration.hooks().multiverseEnabled()) {
+            return new MultiverseHookConnection(WorldTrackingHook.disabled(), "disabled by hooks.yml");
+        }
+        if (!getServer().getPluginManager().isPluginEnabled("Multiverse-Core")) {
+            return new MultiverseHookConnection(WorldTrackingHook.disabled(), "not installed");
+        }
+        try {
+            return new MultiverseHookConnection(MultiverseWorldTrackingHook.connect(), "available");
+        } catch (final RuntimeException | LinkageError failure) {
+            getLogger().log(Level.WARNING, "Multiverse-Core is installed but its API could not be initialized.", failure);
+            return new MultiverseHookConnection(
+                worldName -> WorldTrackingHook.UntrackStatus.FAILED,
+                "API unavailable"
+            );
+        }
+    }
+
+    private void logHooks(
+        final PluginConfiguration configuration,
+        final LuckPermsHook luckPermsHook,
+        final String multiverseStatus
+    ) {
         consoleOutput.info(startupDiagnostics.sectionComponent("Hooks"));
         if (!configuration.hooks().luckPermsEnabled()) {
             consoleOutput.info(startupDiagnostics.detailComponent("LuckPerms: disabled by hooks.yml"));
-            return;
+        } else {
+            consoleOutput.info(startupDiagnostics.detailComponent("LuckPerms: %s".formatted(
+                luckPermsHook.available() ? "available" : "not installed or service unavailable"
+            )));
         }
-        consoleOutput.info(startupDiagnostics.detailComponent("LuckPerms: %s".formatted(
-            luckPermsHook.available() ? "available" : "not installed or service unavailable"
-        )));
+        consoleOutput.info(startupDiagnostics.detailComponent("Multiverse-Core: " + multiverseStatus));
     }
 
     private static String auditBackend(final PluginConfiguration configuration) {
@@ -744,5 +772,8 @@ public final class WorldManagementPlugin extends JavaPlugin {
         AuditStore auditStore,
         MessageService messages
     ) {
+    }
+
+    private record MultiverseHookConnection(WorldTrackingHook hook, String status) {
     }
 }

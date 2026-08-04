@@ -68,19 +68,34 @@ final class BrigadierWorldManagementCommandTest {
 
         assertFullyParsed(dispatcher, "wm create creative NORMAL FLAT --seed Alpha123 --generator Terra:normal");
         assertFullyParsed(dispatcher, "wm create creative NORMAL FLAT --generator Terra:normal --seed Alpha123");
+        assertFullyParsed(
+            dispatcher,
+            "wm create creative NORMAL FLAT --generator-settings '{}' --no-structures "
+                + "--biome Terra:climate --force-spawn-position 0,80,0,90,0"
+        );
+        assertFullyParsed(dispatcher, "wm create creative NORMAL FLAT --generate-bonus-chest");
 
         assertEquals(
-            List.of("--detached", "--generator", "--seed"),
+            List.of(
+                "--biome", "--detached", "--force-spawn-position", "--generate-bonus-chest",
+                "--generator", "--generator-settings", "--no-structures", "--seed"
+            ),
             suggestions("wm create creative NORMAL FLAT ").getList().stream()
                 .map(suggestion -> suggestion.getText()).sorted().toList()
         );
         assertEquals(
-            List.of("--detached", "--generator"),
+            List.of(
+                "--biome", "--detached", "--force-spawn-position", "--generate-bonus-chest",
+                "--generator", "--generator-settings", "--no-structures"
+            ),
             suggestions("wm create creative NORMAL FLAT --seed Alpha123 ").getList().stream()
                 .map(suggestion -> suggestion.getText()).sorted().toList()
         );
         assertEquals(
-            List.of("--generator", "--seed"),
+            List.of(
+                "--biome", "--force-spawn-position", "--generate-bonus-chest", "--generator",
+                "--generator-settings", "--no-structures", "--seed"
+            ),
             suggestions("wm create creative NORMAL FLAT --detached ").getList().stream()
                 .map(suggestion -> suggestion.getText()).sorted().toList()
         );
@@ -101,6 +116,26 @@ final class BrigadierWorldManagementCommandTest {
         assertEquals(input.length() - 1, suggestions.getRange().getStart());
         assertEquals(input.length(), suggestions.getRange().getEnd());
         assertEquals(List.of("Terra"), suggestions.getList().stream().map(suggestion -> suggestion.getText()).toList());
+    }
+
+    @Test
+    void createProviderCompletionKeepsGeneratorAndBiomeSnapshotsSeparate() {
+        final SuggestionCatalog catalog = new SuggestionCatalog(new OnlinePlayerSnapshot());
+        catalog.replaceGeneratorPlugins(List.of("Terra"));
+        catalog.replaceBiomeProviderPlugins(List.of("BiomeOnly"));
+        final BrigadierWorldManagementCommand command = new BrigadierWorldManagementCommand(catalog);
+        final CommandDispatcher<CommandSourceStack> dispatcher = new CommandDispatcher<>();
+        dispatcher.getRoot().addChild(command.build());
+
+        final Suggestions generators = dispatcher.getCompletionSuggestions(dispatcher.parse(
+            "wm create creative NORMAL FLAT --generator ", SOURCE
+        )).join();
+        final Suggestions biomes = dispatcher.getCompletionSuggestions(dispatcher.parse(
+            "wm create creative NORMAL FLAT --biome ", SOURCE
+        )).join();
+
+        assertEquals(List.of("Terra"), generators.getList().stream().map(suggestion -> suggestion.getText()).toList());
+        assertEquals(List.of("BiomeOnly"), biomes.getList().stream().map(suggestion -> suggestion.getText()).toList());
     }
 
     @Test

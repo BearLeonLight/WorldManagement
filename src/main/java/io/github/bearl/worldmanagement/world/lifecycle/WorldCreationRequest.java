@@ -11,6 +11,11 @@ public record WorldCreationRequest(
     WorldRuntimeGateway.WorldType type,
     OptionalLong seed,
     Optional<WorldGeneratorReference> generator,
+    Optional<String> generatorSettings,
+    boolean generateStructures,
+    boolean bonusChest,
+    Optional<WorldGeneratorReference> biomeProvider,
+    Optional<WorldSpawnPosition> forcedSpawnPosition,
     boolean detached
 ) {
 
@@ -22,6 +27,17 @@ public record WorldCreationRequest(
         Objects.requireNonNull(type, "type");
         seed = Objects.requireNonNull(seed, "seed");
         generator = Objects.requireNonNull(generator, "generator");
+        generatorSettings = Objects.requireNonNull(generatorSettings, "generatorSettings");
+        generatorSettings.ifPresent(settings -> {
+            if (settings.isBlank()) {
+                throw new IllegalArgumentException("Generator settings must not be blank.");
+            }
+        });
+        biomeProvider = Objects.requireNonNull(biomeProvider, "biomeProvider");
+        forcedSpawnPosition = Objects.requireNonNull(forcedSpawnPosition, "forcedSpawnPosition");
+        if (bonusChest && forcedSpawnPosition.isPresent()) {
+            throw new IllegalArgumentException("Paper cannot generate a bonus chest with a forced spawn position.");
+        }
     }
 
     public WorldCreationRequest(
@@ -31,6 +47,23 @@ public record WorldCreationRequest(
         final OptionalLong seed,
         final Optional<WorldGeneratorReference> generator
     ) {
-        this(worldName, environment, type, seed, generator, false);
+        this(
+            worldName, environment, type, seed, generator, Optional.empty(), true, false,
+            Optional.empty(), Optional.empty(), false
+        );
+    }
+
+    public WorldCreationRequest(
+        final String worldName,
+        final WorldRuntimeGateway.WorldEnvironment environment,
+        final WorldRuntimeGateway.WorldType type,
+        final OptionalLong seed,
+        final Optional<WorldGeneratorReference> generator,
+        final boolean detached
+    ) {
+        this(
+            worldName, environment, type, seed, generator, Optional.empty(), true, false,
+            Optional.empty(), Optional.empty(), detached
+        );
     }
 }

@@ -147,7 +147,7 @@ public final class WorldManagementService {
         if (candidate.managementState() != WorldManagementState.ACTIVE) {
             return WorldRuntimeResolution.isolated(candidate);
         }
-        final LifecycleCapability effectiveCapability = candidate.generator().isPresent()
+        final LifecycleCapability effectiveCapability = hasRuntimeProvider(candidate)
             ? LifecycleCapability.MANAGED
             : capability;
         return candidate.managementState() == WorldManagementState.ACTIVE
@@ -188,7 +188,7 @@ public final class WorldManagementService {
             if (latest == null || latest.managementState() != WorldManagementState.ACTIVE) {
                 return UpdateResult.notManaged();
             }
-            final LifecycleCapability capability = latest.generator().isPresent()
+            final LifecycleCapability capability = hasRuntimeProvider(latest)
                 ? LifecycleCapability.MANAGED
                 : observedRuntimeCapability;
             final WorldMetadata classified = latest.withObservedIdentity(observed, capability);
@@ -214,7 +214,7 @@ public final class WorldManagementService {
         if (!isLifecyclable(current)) {
             return CompletableFuture.completedFuture(UpdateResult.notManaged());
         }
-        final LifecycleCapability capability = current.generator().isPresent()
+        final LifecycleCapability capability = hasRuntimeProvider(current)
             ? LifecycleCapability.MANAGED
             : observedRuntimeCapability;
         if (current.managementState() == WorldManagementState.DETACHED) {
@@ -233,7 +233,7 @@ public final class WorldManagementService {
             if (!isLifecyclable(latest)) {
                 return UpdateResult.notManaged();
             }
-            final LifecycleCapability latestCapability = latest.generator().isPresent()
+            final LifecycleCapability latestCapability = hasRuntimeProvider(latest)
                 ? LifecycleCapability.MANAGED
                 : observedRuntimeCapability;
             if (latest.managementState() == WorldManagementState.DETACHED) {
@@ -253,6 +253,10 @@ public final class WorldManagementService {
     private static boolean isLifecyclable(final WorldMetadata metadata) {
         return metadata != null && (metadata.managementState() == WorldManagementState.ACTIVE
             || metadata.managementState() == WorldManagementState.DETACHED);
+    }
+
+    private static boolean hasRuntimeProvider(final WorldMetadata metadata) {
+        return metadata.generator().isPresent() || metadata.biomeProvider().isPresent();
     }
 
     public CompletableFuture<IdentitySyncResult> synchronizeIdentity(
@@ -390,7 +394,22 @@ public final class WorldManagementService {
         final AuditEvent auditEvent
     ) {
         return adopt(
-            identity, lifecycleCapability, requestedWorldType, generator,
+            identity, lifecycleCapability, requestedWorldType, generator, Optional.empty(),
+            rankSystemEnabled, WorldManagementState.ACTIVE, auditEvent
+        );
+    }
+
+    public CompletableFuture<AdoptionResult> adopt(
+        final WorldIdentitySnapshot identity,
+        final LifecycleCapability lifecycleCapability,
+        final Optional<RequestedWorldType> requestedWorldType,
+        final Optional<WorldGeneratorReference> generator,
+        final Optional<WorldGeneratorReference> biomeProvider,
+        final boolean rankSystemEnabled,
+        final AuditEvent auditEvent
+    ) {
+        return adopt(
+            identity, lifecycleCapability, requestedWorldType, generator, biomeProvider,
             rankSystemEnabled, WorldManagementState.ACTIVE, auditEvent
         );
     }
@@ -405,7 +424,23 @@ public final class WorldManagementService {
         final AuditEvent auditEvent
     ) {
         return adopt(
-            identity, lifecycleCapability, requestedWorldType, generator, rankSystemEnabled,
+            identity, lifecycleCapability, requestedWorldType, generator, Optional.empty(), rankSystemEnabled,
+            initialManagementState, WorldRegistrationSource.STANDARD, auditEvent
+        );
+    }
+
+    public CompletableFuture<AdoptionResult> adopt(
+        final WorldIdentitySnapshot identity,
+        final LifecycleCapability lifecycleCapability,
+        final Optional<RequestedWorldType> requestedWorldType,
+        final Optional<WorldGeneratorReference> generator,
+        final Optional<WorldGeneratorReference> biomeProvider,
+        final boolean rankSystemEnabled,
+        final WorldManagementState initialManagementState,
+        final AuditEvent auditEvent
+    ) {
+        return adopt(
+            identity, lifecycleCapability, requestedWorldType, generator, biomeProvider, rankSystemEnabled,
             initialManagementState, WorldRegistrationSource.STANDARD, auditEvent
         );
     }
@@ -420,6 +455,23 @@ public final class WorldManagementService {
         final WorldRegistrationSource registrationSource,
         final AuditEvent auditEvent
     ) {
+        return adopt(
+            identity, lifecycleCapability, requestedWorldType, generator, Optional.empty(), rankSystemEnabled,
+            initialManagementState, registrationSource, auditEvent
+        );
+    }
+
+    public CompletableFuture<AdoptionResult> adopt(
+        final WorldIdentitySnapshot identity,
+        final LifecycleCapability lifecycleCapability,
+        final Optional<RequestedWorldType> requestedWorldType,
+        final Optional<WorldGeneratorReference> generator,
+        final Optional<WorldGeneratorReference> biomeProvider,
+        final boolean rankSystemEnabled,
+        final WorldManagementState initialManagementState,
+        final WorldRegistrationSource registrationSource,
+        final AuditEvent auditEvent
+    ) {
         final WorldIdentitySnapshot requiredIdentity = Objects.requireNonNull(identity, "identity");
         return adopt(WorldMetadata.createDefault(
             requiredIdentity.keyValue(),
@@ -427,6 +479,7 @@ public final class WorldManagementService {
             Objects.requireNonNull(lifecycleCapability, "lifecycleCapability"),
             Objects.requireNonNull(requestedWorldType, "requestedWorldType"),
             Objects.requireNonNull(generator, "generator"),
+            Objects.requireNonNull(biomeProvider, "biomeProvider"),
             Objects.requireNonNull(initialManagementState, "initialManagementState"),
             Objects.requireNonNull(registrationSource, "registrationSource"),
             rankSystemEnabled

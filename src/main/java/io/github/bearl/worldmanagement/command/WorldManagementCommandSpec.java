@@ -102,8 +102,13 @@ final class WorldManagementCommandSpec {
         final CommandNodeSpec options = CommandNodeSpec.typedArgument(
             "create.options",
             "options",
-            new CreateCommandOptionsArgument(suggestions::generatorPlugins),
-            "[--seed <seed>] [--generator <plugin[:id]>] [--detached]",
+            new CreateCommandOptionsArgument(
+                suggestions::generatorPlugins,
+                suggestions::biomeProviderPlugins
+            ),
+            "[--seed <seed>] [--generator <plugin[:id]>] [--generator-settings <json>] "
+                + "[--no-structures] [--generate-bonus-chest] [--biome <plugin[:id]>] "
+                + "[--force-spawn-position <x,y,z[,yaw,pitch]>] [--detached]",
             List.of()
         ).executesTyped(route("create"), List.of(
             new CommandArgumentBinding("world", String.class),

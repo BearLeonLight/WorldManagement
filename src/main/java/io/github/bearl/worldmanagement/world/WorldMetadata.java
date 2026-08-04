@@ -18,6 +18,7 @@ public record WorldMetadata(
     Optional<WorldIdentitySnapshot> pendingIdentity,
     Optional<RequestedWorldType> requestedWorldType,
     Optional<WorldGeneratorReference> generator,
+    Optional<WorldGeneratorReference> biomeProvider,
     WorldManagementState managementState,
     WorldLoadState desiredState,
     String owner,
@@ -46,6 +47,7 @@ public record WorldMetadata(
         pendingIdentity = Objects.requireNonNull(pendingIdentity, "pendingIdentity");
         requestedWorldType = Objects.requireNonNull(requestedWorldType, "requestedWorldType");
         generator = Objects.requireNonNull(generator, "generator");
+        biomeProvider = Objects.requireNonNull(biomeProvider, "biomeProvider");
         Objects.requireNonNull(managementState, "managementState");
         Objects.requireNonNull(desiredState, "desiredState");
         Objects.requireNonNull(owner, "owner");
@@ -84,6 +86,7 @@ public record WorldMetadata(
         final Optional<WorldIdentitySnapshot> pendingIdentity,
         final Optional<RequestedWorldType> requestedWorldType,
         final Optional<WorldGeneratorReference> generator,
+        final Optional<WorldGeneratorReference> biomeProvider,
         final WorldManagementState managementState,
         final WorldLoadState desiredState,
         final String owner,
@@ -96,9 +99,35 @@ public record WorldMetadata(
     ) {
         this(
             worldName, displayName, identity, identityState, lifecycleCapability, pendingIdentity,
-            requestedWorldType, generator, managementState, desiredState, owner, rankSystemEnabled,
+            requestedWorldType, generator, biomeProvider, managementState, desiredState, owner, rankSystemEnabled,
             accessControl, ranks, playerRanks, warps, version, Optional.empty(),
             WorldRegistrationSource.STANDARD
+        );
+    }
+
+    public WorldMetadata(
+        final String worldName,
+        final String displayName,
+        final WorldIdentitySnapshot identity,
+        final IdentityVerificationState identityState,
+        final LifecycleCapability lifecycleCapability,
+        final Optional<WorldIdentitySnapshot> pendingIdentity,
+        final Optional<RequestedWorldType> requestedWorldType,
+        final Optional<WorldGeneratorReference> generator,
+        final WorldManagementState managementState,
+        final WorldLoadState desiredState,
+        final String owner,
+        final boolean rankSystemEnabled,
+        final AccessControl accessControl,
+        final Map<String, Rank> ranks,
+        final Map<UUID, String> playerRanks,
+        final Map<String, WorldWarp> warps,
+        final long version
+    ) {
+        this(
+            worldName, displayName, identity, identityState, lifecycleCapability, pendingIdentity,
+            requestedWorldType, generator, Optional.empty(), managementState, desiredState, owner,
+            rankSystemEnabled, accessControl, ranks, playerRanks, warps, version
         );
     }
 
@@ -122,7 +151,7 @@ public record WorldMetadata(
     ) {
         this(
             worldName, displayName, identity, identityState, lifecycleCapability, pendingIdentity,
-            requestedWorldType, Optional.empty(), managementState, desiredState, owner, rankSystemEnabled,
+            requestedWorldType, Optional.empty(), Optional.empty(), managementState, desiredState, owner, rankSystemEnabled,
             accessControl, ranks, playerRanks, warps, version
         );
     }
@@ -222,7 +251,22 @@ public record WorldMetadata(
     ) {
         return createDefault(
             worldName, identity, lifecycleCapability, requestedWorldType, generator,
-            WorldManagementState.ACTIVE, rankSystemEnabled
+            Optional.empty(), WorldManagementState.ACTIVE, rankSystemEnabled
+        );
+    }
+
+    public static WorldMetadata createDefault(
+        final String worldName,
+        final WorldIdentitySnapshot identity,
+        final LifecycleCapability lifecycleCapability,
+        final Optional<RequestedWorldType> requestedWorldType,
+        final Optional<WorldGeneratorReference> generator,
+        final Optional<WorldGeneratorReference> biomeProvider,
+        final boolean rankSystemEnabled
+    ) {
+        return createDefault(
+            worldName, identity, lifecycleCapability, requestedWorldType, generator,
+            biomeProvider, WorldManagementState.ACTIVE, rankSystemEnabled
         );
     }
 
@@ -237,7 +281,7 @@ public record WorldMetadata(
     ) {
         return createDefault(
             worldName, identity, lifecycleCapability, requestedWorldType, generator,
-            managementState, WorldRegistrationSource.STANDARD, rankSystemEnabled
+            Optional.empty(), managementState, WorldRegistrationSource.STANDARD, rankSystemEnabled
         );
     }
 
@@ -247,6 +291,39 @@ public record WorldMetadata(
         final LifecycleCapability lifecycleCapability,
         final Optional<RequestedWorldType> requestedWorldType,
         final Optional<WorldGeneratorReference> generator,
+        final Optional<WorldGeneratorReference> biomeProvider,
+        final WorldManagementState managementState,
+        final boolean rankSystemEnabled
+    ) {
+        return createDefault(
+            worldName, identity, lifecycleCapability, requestedWorldType, generator,
+            biomeProvider, managementState, WorldRegistrationSource.STANDARD, rankSystemEnabled
+        );
+    }
+
+    public static WorldMetadata createDefault(
+        final String worldName,
+        final WorldIdentitySnapshot identity,
+        final LifecycleCapability lifecycleCapability,
+        final Optional<RequestedWorldType> requestedWorldType,
+        final Optional<WorldGeneratorReference> generator,
+        final WorldManagementState managementState,
+        final WorldRegistrationSource registrationSource,
+        final boolean rankSystemEnabled
+    ) {
+        return createDefault(
+            worldName, identity, lifecycleCapability, requestedWorldType, generator, Optional.empty(),
+            managementState, registrationSource, rankSystemEnabled
+        );
+    }
+
+    public static WorldMetadata createDefault(
+        final String worldName,
+        final WorldIdentitySnapshot identity,
+        final LifecycleCapability lifecycleCapability,
+        final Optional<RequestedWorldType> requestedWorldType,
+        final Optional<WorldGeneratorReference> generator,
+        final Optional<WorldGeneratorReference> biomeProvider,
         final WorldManagementState managementState,
         final WorldRegistrationSource registrationSource,
         final boolean rankSystemEnabled
@@ -264,6 +341,7 @@ public record WorldMetadata(
             Optional.empty(),
             requestedWorldType,
             generator,
+            biomeProvider,
             initialState,
             WorldLoadState.LOADED,
             SERVER_OWNER,
@@ -291,6 +369,7 @@ public record WorldMetadata(
             pendingIdentity,
             requestedWorldType,
             generator,
+            biomeProvider,
             managementState,
             desiredState,
             owner,
@@ -323,6 +402,7 @@ public record WorldMetadata(
             pendingIdentity,
             requestedWorldType,
             generator,
+            biomeProvider,
             managementState,
             desiredState,
             updatedOwner,
@@ -347,6 +427,7 @@ public record WorldMetadata(
             pendingIdentity,
             requestedWorldType,
             generator,
+            biomeProvider,
             managementState,
             desiredState,
             owner,
@@ -363,7 +444,8 @@ public record WorldMetadata(
 
     public WorldMetadata withDesiredState(final WorldLoadState updatedDesiredState) {
         return new WorldMetadata(
-            worldName, displayName, identity, identityState, lifecycleCapability, pendingIdentity, requestedWorldType, generator,
+            worldName, displayName, identity, identityState, lifecycleCapability, pendingIdentity,
+            requestedWorldType, generator, biomeProvider,
             managementState,
             Objects.requireNonNull(updatedDesiredState, "updatedDesiredState"),
             owner, rankSystemEnabled, accessControl, ranks, playerRanks, warps, version + 1,
@@ -373,7 +455,8 @@ public record WorldMetadata(
 
     public WorldMetadata withManagementState(final WorldManagementState updatedManagementState) {
         return new WorldMetadata(
-            worldName, displayName, identity, identityState, lifecycleCapability, pendingIdentity, requestedWorldType, generator,
+            worldName, displayName, identity, identityState, lifecycleCapability, pendingIdentity,
+            requestedWorldType, generator, biomeProvider,
             Objects.requireNonNull(updatedManagementState, "updatedManagementState"), desiredState,
             owner, rankSystemEnabled, accessControl, ranks, playerRanks, warps, version + 1,
             Optional.empty(), registrationSource
@@ -383,7 +466,7 @@ public record WorldMetadata(
     public WorldMetadata withDeleting(final UUID transactionId) {
         return new WorldMetadata(
             worldName, displayName, identity, identityState, lifecycleCapability, pendingIdentity,
-            requestedWorldType, generator, WorldManagementState.DELETING, desiredState, owner,
+            requestedWorldType, generator, biomeProvider, WorldManagementState.DELETING, desiredState, owner,
             rankSystemEnabled, accessControl, ranks, playerRanks, warps, version + 1,
             Optional.of(Objects.requireNonNull(transactionId, "transactionId")), registrationSource
         );
@@ -394,7 +477,8 @@ public record WorldMetadata(
         final WorldLoadState updatedDesiredState
     ) {
         return new WorldMetadata(
-            worldName, displayName, identity, identityState, lifecycleCapability, pendingIdentity, requestedWorldType, generator,
+            worldName, displayName, identity, identityState, lifecycleCapability, pendingIdentity,
+            requestedWorldType, generator, biomeProvider,
             Objects.requireNonNull(updatedManagementState, "updatedManagementState"),
             Objects.requireNonNull(updatedDesiredState, "updatedDesiredState"),
             owner, rankSystemEnabled, accessControl, ranks, playerRanks, warps, version + 1,
@@ -567,6 +651,7 @@ public record WorldMetadata(
             pendingIdentity,
             requestedWorldType,
             generator,
+            biomeProvider,
             WorldManagementState.DETACHED,
             WorldLoadState.UNLOADED,
             owner,
@@ -604,6 +689,7 @@ public record WorldMetadata(
             pendingIdentity,
             requestedWorldType,
             generator,
+            biomeProvider,
             managementState,
             desiredState,
             owner,
@@ -628,6 +714,7 @@ public record WorldMetadata(
             pendingIdentity,
             requestedWorldType,
             generator,
+            biomeProvider,
             managementState,
             desiredState,
             owner,
@@ -658,6 +745,7 @@ public record WorldMetadata(
             updatedPendingIdentity,
             requestedWorldType,
             generator,
+            biomeProvider,
             managementState,
             desiredState,
             owner,

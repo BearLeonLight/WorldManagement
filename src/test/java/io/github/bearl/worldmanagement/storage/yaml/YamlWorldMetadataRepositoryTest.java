@@ -123,16 +123,16 @@ final class YamlWorldMetadataRepositoryTest {
     }
 
     @Test
-    void refusesSchemaFiveWithoutModifyingOrQuarantiningIt() throws Exception {
+    void refusesSchemaSixWithoutModifyingOrQuarantiningIt() throws Exception {
         final Path worlds = temporaryDirectory.resolve("worlds");
         Files.createDirectories(worlds);
         final Path metadataFile = worlds.resolve("creative.yml");
-        Files.writeString(metadataFile, "schema-version: 5\nworld-id: creative\n");
+        Files.writeString(metadataFile, "schema-version: 6\nworld-id: creative\n");
 
         final YamlWorldMetadataRepository repository = new YamlWorldMetadataRepository(worlds);
 
         assertThrows(UnsupportedStorageSchemaException.class, repository::loadAll);
-        assertEquals("schema-version: 5\nworld-id: creative\n", Files.readString(metadataFile));
+        assertEquals("schema-version: 6\nworld-id: creative\n", Files.readString(metadataFile));
         assertFalse(Files.exists(worlds.resolve("backup")));
         assertFalse(Files.exists(worlds.resolve("quarantine")));
     }
@@ -142,7 +142,7 @@ final class YamlWorldMetadataRepositoryTest {
                 final Path worlds = temporaryDirectory.resolve("worlds");
                 Files.createDirectories(worlds);
                 final Path metadataFile = worlds.resolve("creative.yml");
-                Files.writeString(metadataFile, "schema-version: 5\n");
+                Files.writeString(metadataFile, "schema-version: 6\n");
 
                 final YamlWorldMetadataRepository repository = new YamlWorldMetadataRepository(worlds);
 
@@ -157,7 +157,7 @@ final class YamlWorldMetadataRepositoryTest {
                 Files.createDirectories(worlds);
                 final Path corrupt = worlds.resolve("a-corrupt.yml");
                 Files.writeString(corrupt, "schema-version: 1\nworld-id: creative\n");
-                Files.writeString(worlds.resolve("z-future.yml"), "schema-version: 5\n");
+                Files.writeString(worlds.resolve("z-future.yml"), "schema-version: 6\n");
                 final YamlWorldMetadataRepository repository = new YamlWorldMetadataRepository(worlds);
 
                 assertThrows(UnsupportedStorageSchemaException.class, repository::loadAll);

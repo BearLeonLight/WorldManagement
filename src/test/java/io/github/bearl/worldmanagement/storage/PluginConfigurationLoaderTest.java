@@ -31,7 +31,24 @@ final class PluginConfigurationLoaderTest {
         assertTrue(configuration.debug().areas().containsAll(java.util.EnumSet.allOf(DebugArea.class)));
         assertTrue(configuration.debug().consoleEnabled());
         assertTrue(configuration.debug().fileEnabled());
+                assertTrue(configuration.hooks().luckPermsEnabled());
+                assertTrue(configuration.hooks().multiverseEnabled());
     }
+
+        @Test
+        void loadsOptionalHookEnablement() throws IOException {
+                Files.writeString(temporaryDirectory.resolve("hooks.yml"), """
+                        luckperms:
+                            enabled: false
+                        multiverse:
+                            enabled: false
+                        """);
+
+                final var hooks = new PluginConfigurationLoader().load(temporaryDirectory).hooks();
+
+                assertTrue(!hooks.luckPermsEnabled());
+                assertTrue(!hooks.multiverseEnabled());
+        }
 
     @Test
     void replacesAnExistingBlankConfigurationWithDefaults() throws IOException {

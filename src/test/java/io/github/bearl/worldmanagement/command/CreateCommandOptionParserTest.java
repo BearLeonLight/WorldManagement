@@ -27,6 +27,30 @@ final class CreateCommandOptionParserTest {
     }
 
     @Test
+    void parsesPaperCreationOptionsWithQuotedGeneratorSettings() {
+        final CreateCommandOptions options = parse("""
+            --generator-settings '{"layers":[{"block":"stone","height":1}],"biome":"plains"}' \
+            --no-structures --biome Terra:climate \
+            --force-spawn-position 12.5,80,-4.5,90,15 --detached
+            """);
+
+        assertEquals(
+            Optional.of("{\"layers\":[{\"block\":\"stone\",\"height\":1}],\"biome\":\"plains\"}"),
+            options.generatorSettings()
+        );
+        assertFalse(options.generateStructures());
+        assertFalse(options.bonusChest());
+        assertEquals(Optional.of("Terra:climate"), options.biomeProvider());
+        assertEquals(
+            Optional.of(new io.github.bearl.worldmanagement.world.lifecycle.WorldSpawnPosition(
+                12.5, 80.0, -4.5, 90.0f, 15.0f
+            )),
+            options.forcedSpawnPosition()
+        );
+        assertEquals(true, options.detached());
+    }
+
+    @Test
     void parsesNumericSeedAndAllowsNoOptions() {
         assertEquals(OptionalLong.of(12345L), parse("--seed 12345").seed());
         assertEquals(CreateCommandOptions.defaults(), parse(""));
@@ -43,9 +67,21 @@ final class CreateCommandOptionParserTest {
     @ValueSource(strings = {
         "--seed first --seed second",
         "--generator Terra --generator Iris",
+        "--generator-settings '{}' --generator-settings '{}'",
+        "--biome Terra:first --biome Terra:second",
+        "--no-structures --no-structures",
+        "--generate-bonus-chest --generate-bonus-chest",
+        "--generate-bonus-chest --force-spawn-position 0,64,0",
+        "--force-spawn-position 0,64,0 --force-spawn-position 1,65,1",
         "--unknown value",
         "--seed",
         "--generator",
+        "--generator-settings",
+        "--biome",
+        "--force-spawn-position",
+        "--force-spawn-position 0,64",
+        "--force-spawn-position NaN,64,0",
+        "--force-spawn-position 0,64,0,0,91",
         "loose",
         "42",
         "--seed invalid_seed",
