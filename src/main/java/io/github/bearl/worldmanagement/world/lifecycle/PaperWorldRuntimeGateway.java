@@ -4,7 +4,6 @@ import java.util.Objects;
 import java.util.Set;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ConcurrentHashMap;
-import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.Optional;
 import org.bukkit.Bukkit;
 import org.bukkit.Location;
@@ -20,8 +19,10 @@ public final class PaperWorldRuntimeGateway implements WorldRuntimeGateway {
     private final Plugin plugin;
     private final LoadedWorldCatalog loadedWorldCatalog;
     private final WorldGeneratorCatalog generators;
-    private final Set<CompletableFuture<Boolean>> pendingTeleports = ConcurrentHashMap.newKeySet();
-    private final AtomicBoolean acceptingOperations = new AtomicBoolean(true);
+    private final RuntimeResolver runtimeResolver;
+    private final Object admissionLock = new Object();
+    private final Set<PendingLifecycleTeleport> pendingTeleports = ConcurrentHashMap.newKeySet();
+    private boolean acceptingOperations = true;
 
     public PaperWorldRuntimeGateway(final Plugin plugin, final LoadedWorldCatalog loadedWorldCatalog) {
         this(plugin, loadedWorldCatalog, new WorldGeneratorCatalog(
@@ -34,9 +35,19 @@ public final class PaperWorldRuntimeGateway implements WorldRuntimeGateway {
         final LoadedWorldCatalog loadedWorldCatalog,
         final WorldGeneratorCatalog generators
     ) {
+        this(plugin, loadedWorldCatalog, generators, new BukkitRuntimeResolver());
+    }
+
+    PaperWorldRuntimeGateway(
+        final Plugin plugin,
+        final LoadedWorldCatalog loadedWorldCatalog,
+        final WorldGeneratorCatalog generators,
+        final RuntimeResolver runtimeResolver
+    ) {
         this.plugin = Objects.requireNonNull(plugin, "plugin");
         this.loadedWorldCatalog = Objects.requireNonNull(loadedWorldCatalog, "loadedWorldCatalog");
         this.generators = Objects.requireNonNull(generators, "generators");
+        this.runtimeResolver = Objects.requireNonNull(runtimeResolver, "runtimeResolver");
     }
 
     @Override
@@ -87,7 +98,7 @@ public final class PaperWorldRuntimeGateway implements WorldRuntimeGateway {
     @Override
     public LoadResult loadUnmanaged(final String worldName, final WorldEnvironment environment) {
         final NamespacedKey key = NamespacedKey.minecraft(Objects.requireNonNull(worldName, "worldName"));
-        final World existing = Bukkit.getWorld(key);
+        final World existing = runtimeResolver.world(key);
         if (existing != null) {
             return LoadResult.loaded(fromPaperWorld(existing), false);
         }
@@ -120,7 +131,7 @@ public final class PaperWorldRuntimeGateway implements WorldRuntimeGateway {
         if (key == null) {
             return LoadResult.failed();
         }
-        final World existing = Bukkit.getWorld(key);
+        final World existing = runtimeResolver.world(key);
         if (existing != null) {
             return LoadResult.loaded(fromPaperWorld(existing), false);
         }
@@ -150,10 +161,29 @@ public final class PaperWorldRuntimeGateway implements WorldRuntimeGateway {
         if (key == null) {
             return false;
         }
-        final World world = Bukkit.getWorld(key);
+        final World world = runtimeResolver.world(key);
         return world != null
             && world.getUID().equals(requiredWorld.identity().worldUuid())
             && Bukkit.unloadWorld(world, save);
+    }
+
+    @Override
+    public boolean save(final LifecycleWorld lifecycleWorld) {
+        final LifecycleWorld requiredWorld = Objects.requireNonNull(lifecycleWorld, "lifecycleWorld");
+        final NamespacedKey key = NamespacedKey.fromString(requiredWorld.identity().paperKey());
+        if (key == null) {
+            return false;
+        }
+        final World world = runtimeResolver.world(key);
+        if (world == null || !world.getUID().equals(requiredWorld.identity().worldUuid())) {
+            return false;
+        }
+        try {
+            world.save();
+            return true;
+        } catch (final RuntimeException exception) {
+            return false;
+        }
     }
 
     @Override
@@ -165,7 +195,7 @@ public final class PaperWorldRuntimeGateway implements WorldRuntimeGateway {
         if (key == null) {
             return Optional.empty();
         }
-        return Optional.ofNullable(Bukkit.getWorld(key)).map(PaperWorldRuntimeGateway::fromPaperWorld);
+        return Optional.ofNullable(runtimeResolver.world(key)).map(PaperWorldRuntimeGateway::fromPaperWorld);
     }
 
     @Override
@@ -178,12 +208,12 @@ public final class PaperWorldRuntimeGateway implements WorldRuntimeGateway {
         final NamespacedKey key = NamespacedKey.fromString(Objects.requireNonNull(paperKey, "paperKey"));
         return key == null
             ? Optional.empty()
-            : Optional.ofNullable(Bukkit.getWorld(key)).map(PaperWorldRuntimeGateway::fromPaperWorld);
+            : Optional.ofNullable(runtimeResolver.world(key)).map(PaperWorldRuntimeGateway::fromPaperWorld);
     }
 
     @Override
     public Optional<LifecycleWorld> primaryWorld() {
-        return Bukkit.getWorlds().stream().findFirst().map(PaperWorldRuntimeGateway::fromPaperWorld);
+        return runtimeResolver.primaryWorld().map(PaperWorldRuntimeGateway::fromPaperWorld);
     }
 
     @Override
@@ -198,8 +228,10 @@ public final class PaperWorldRuntimeGateway implements WorldRuntimeGateway {
         final LifecycleWorld sourceWorld,
         final LifecycleWorld targetWorld
     ) {
-        if (!acceptingOperations.get()) {
-            return CompletableFuture.completedFuture(false);
+        synchronized (admissionLock) {
+            if (!acceptingOperations) {
+                return CompletableFuture.completedFuture(false);
+            }
         }
         final LifecycleWorld requiredSource = Objects.requireNonNull(sourceWorld, "sourceWorld");
         final LifecycleWorld requiredTarget = Objects.requireNonNull(targetWorld, "targetWorld");
@@ -222,30 +254,62 @@ public final class PaperWorldRuntimeGateway implements WorldRuntimeGateway {
         final io.github.bearl.worldmanagement.world.VerifiedWorldRef expectedSource,
         final io.github.bearl.worldmanagement.world.VerifiedWorldRef expectedTarget
     ) {
-        final CompletableFuture<Boolean> completion = new CompletableFuture<>();
-        pendingTeleports.add(completion);
-        completion.whenComplete((result, failure) -> pendingTeleports.remove(completion));
-        if (!acceptingOperations.get()) {
-            completion.complete(false);
-            return completion;
+        final PendingLifecycleTeleport operation = new PendingLifecycleTeleport();
+        synchronized (admissionLock) {
+            if (!acceptingOperations) {
+                operation.completeBeforeSubmission(false);
+                return operation.result();
+            }
+            pendingTeleports.add(operation);
+            operation.drain().whenComplete((unused, failure) -> pendingTeleports.remove(operation));
         }
-        final boolean scheduled = player.getScheduler().execute(plugin, () -> {
-            if (!player.getWorld().getUID().equals(expectedSource.worldUuid())
-                || destination.getWorld() == null
-                || !destination.getWorld().getUID().equals(expectedTarget.worldUuid())) {
-                completion.complete(false);
+        final boolean scheduled;
+        try {
+            scheduled = player.getScheduler().execute(plugin, () -> {
+                if (!player.getWorld().getUID().equals(expectedSource.worldUuid())
+                    || destination.getWorld() == null
+                    || !destination.getWorld().getUID().equals(expectedTarget.worldUuid())) {
+                    completeBeforeSubmission(operation, false);
+                    return;
+                }
+                submitPaperTeleport(operation, player, destination);
+            },
+                () -> completeBeforeSubmission(operation, false), 1L);
+        } catch (final RuntimeException failure) {
+            completeBeforeSubmission(operation, false);
+            return operation.result();
+        }
+        if (!scheduled) {
+            completeBeforeSubmission(operation, false);
+        }
+        return operation.result();
+    }
+
+    private void submitPaperTeleport(
+        final PendingLifecycleTeleport operation,
+        final Player player,
+        final Location destination
+    ) {
+        synchronized (admissionLock) {
+            if (!acceptingOperations) {
+                operation.completeBeforeSubmission(false);
                 return;
             }
-            player.teleportAsync(destination.clone())
-                .whenComplete((teleported, failure) -> completion.complete(
-                    failure == null && Boolean.TRUE.equals(teleported)
-                ));
-        },
-            () -> completion.complete(false), 1L);
-        if (!scheduled) {
-            completion.complete(false);
+            try {
+                final CompletableFuture<Boolean> paperTeleport = Objects.requireNonNull(
+                    player.teleportAsync(destination.clone()), "Paper teleport future"
+                );
+                operation.submitted(paperTeleport);
+            } catch (final RuntimeException failure) {
+                operation.completeBeforeSubmission(false);
+            }
         }
-        return completion;
+    }
+
+    private void completeBeforeSubmission(final PendingLifecycleTeleport operation, final boolean value) {
+        synchronized (admissionLock) {
+            operation.completeBeforeSubmission(false);
+        }
     }
 
     private Optional<World> resolveExact(final LifecycleWorld lifecycleWorld) {
@@ -253,15 +317,24 @@ public final class PaperWorldRuntimeGateway implements WorldRuntimeGateway {
         if (key == null) {
             return Optional.empty();
         }
-        final World world = Bukkit.getWorld(key);
+        final World world = runtimeResolver.world(key);
         return world != null && world.getUID().equals(lifecycleWorld.identity().worldUuid())
             ? Optional.of(world) : Optional.empty();
     }
 
     @Override
-    public void cancelPendingOperations() {
-        acceptingOperations.set(false);
-        pendingTeleports.forEach(completion -> completion.complete(false));
+    public CompletableFuture<Void> beginShutdown() {
+        final PendingLifecycleTeleport[] pending;
+        synchronized (admissionLock) {
+            acceptingOperations = false;
+            pending = pendingTeleports.toArray(PendingLifecycleTeleport[]::new);
+            for (final PendingLifecycleTeleport operation : pending) {
+                operation.rejectForShutdown();
+            }
+        }
+        return CompletableFuture.allOf(java.util.Arrays.stream(pending)
+            .map(PendingLifecycleTeleport::drain)
+            .toArray(CompletableFuture[]::new));
     }
 
     private static LifecycleWorld fromPaperWorld(final World world) {
@@ -296,5 +369,62 @@ public final class PaperWorldRuntimeGateway implements WorldRuntimeGateway {
             case AMPLIFIED -> org.bukkit.WorldType.AMPLIFIED;
             case LARGE_BIOMES -> org.bukkit.WorldType.LARGE_BIOMES;
         };
+    }
+
+    interface RuntimeResolver {
+        World world(NamespacedKey key);
+
+        Optional<World> primaryWorld();
+    }
+
+    private static final class BukkitRuntimeResolver implements RuntimeResolver {
+        @Override
+        public World world(final NamespacedKey key) {
+            return Bukkit.getWorld(key);
+        }
+
+        @Override
+        public Optional<World> primaryWorld() {
+            return Bukkit.getWorlds().stream().findFirst();
+        }
+    }
+
+    /** Tracks a lifecycle teleport with separate command result and Paper drain futures. */
+    private static final class PendingLifecycleTeleport {
+
+        private final CompletableFuture<Boolean> result = new CompletableFuture<>();
+        private final CompletableFuture<Void> drain = new CompletableFuture<>();
+        private boolean submitted;
+
+        CompletableFuture<Boolean> result() {
+            return result;
+        }
+
+        CompletableFuture<Void> drain() {
+            return drain;
+        }
+
+        void completeBeforeSubmission(final boolean value) {
+            if (submitted) {
+                return;
+            }
+            result.complete(value);
+            drain.complete(null);
+        }
+
+        void submitted(final CompletableFuture<Boolean> paperTeleport) {
+            submitted = true;
+            paperTeleport.whenComplete((teleported, failure) -> {
+                result.complete(failure == null && Boolean.TRUE.equals(teleported));
+                drain.complete(null);
+            });
+        }
+
+        void rejectForShutdown() {
+            result.complete(false);
+            if (!submitted) {
+                drain.complete(null);
+            }
+        }
     }
 }

@@ -4,13 +4,16 @@ CONSOLE_RUNTIME wm help <query...>
 CONSOLE_RUNTIME wm create <world> <environment> <world-type>
 CONSOLE_RUNTIME wm create <world> <environment> <world-type> <options>
 CONSOLE_RUNTIME wm adopt <world>
+CONSOLE_RUNTIME wm adopt <world> --detached
 CONSOLE_RUNTIME wm load <world>
+CONSOLE_RUNTIME wm load <world> <environment> --detached
 CONSOLE_RUNTIME wm unload <world>
 PLAYER_RUNTIME wm unload <world> <fallback>
 CONSOLE_RUNTIME wm remove <world>
 CONSOLE_RUNTIME wm remove <world> purge confirm
 CONSOLE_RUNTIME wm manage <world>
 CONSOLE_RUNTIME wm import <world> <environment>
+CONSOLE_RUNTIME wm import <world> <environment> --detached
 CONSOLE_RUNTIME wm delete <world> confirm
 PLAYER_RUNTIME wm delete <world> <fallback> confirm
 CONSOLE_RUNTIME wm identity show <world>

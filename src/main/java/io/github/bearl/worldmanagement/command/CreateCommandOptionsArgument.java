@@ -6,7 +6,7 @@ import com.mojang.brigadier.arguments.ArgumentType;
 import com.mojang.brigadier.arguments.StringArgumentType;
 import com.mojang.brigadier.context.CommandContext;
 import com.mojang.brigadier.exceptions.CommandSyntaxException;
-import com.mojang.brigadier.exceptions.DynamicCommandExceptionType;
+import com.mojang.brigadier.exceptions.SimpleCommandExceptionType;
 import com.mojang.brigadier.suggestion.Suggestions;
 import com.mojang.brigadier.suggestion.SuggestionsBuilder;
 import io.papermc.paper.command.brigadier.argument.CustomArgumentType;
@@ -21,10 +21,10 @@ import java.util.function.Supplier;
 
 final class CreateCommandOptionsArgument implements CustomArgumentType<CreateCommandOptions, String> {
 
-    private static final DynamicCommandExceptionType INVALID_OPTIONS = new DynamicCommandExceptionType(
-        value -> new LiteralMessage(value.toString())
-    );
-    private static final List<String> OPTION_KEYS = List.of("--generator", "--seed");
+    private static final SimpleCommandExceptionType INVALID_OPTIONS =
+        new SimpleCommandExceptionType(new LiteralMessage("Invalid create options."));
+    private static final List<String> OPTION_KEYS = List.of("--generator", "--seed", "--detached");
+    private static final Set<String> VALUE_OPTIONS = Set.of("--generator", "--seed");
 
     private final CreateCommandOptionParser parser = new CreateCommandOptionParser();
     private final Supplier<? extends Collection<String>> generatorPlugins;
@@ -38,7 +38,7 @@ final class CreateCommandOptionsArgument implements CustomArgumentType<CreateCom
         try {
             return parser.parse(reader);
         } catch (final IllegalArgumentException exception) {
-            throw INVALID_OPTIONS.createWithContext(reader, exception.getMessage());
+            throw INVALID_OPTIONS.create();
         }
     }
 
@@ -93,7 +93,9 @@ final class CreateCommandOptionsArgument implements CustomArgumentType<CreateCom
                 if (!OPTION_KEYS.contains(token.value()) || !used.add(token.value())) {
                     return new PartialOptions(Set.of(), null, current, currentStart, false);
                 }
-                expectedValue = token.value();
+                if (VALUE_OPTIONS.contains(token.value())) {
+                    expectedValue = token.value();
+                }
             }
             return new PartialOptions(Set.copyOf(used), expectedValue, current, currentStart, true);
         }

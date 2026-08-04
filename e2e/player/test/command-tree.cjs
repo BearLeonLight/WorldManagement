@@ -11,15 +11,27 @@ function literalChildrenAt (packet, path) {
   let current = requiredNode(nodes, rootIndex)
   for (const segment of path) {
     const childIndex = childIndexes(current)
-      .find(index => requiredNode(nodes, index).extraNodeData?.name === segment)
+      .find(index => {
+        const child = requiredNode(nodes, index)
+        return nodeType(child) === 1 && child.extraNodeData?.name === segment
+      })
     if (childIndex === undefined) return undefined
     current = requiredNode(nodes, childIndex)
   }
 
   return childIndexes(current)
-    .map(index => requiredNode(nodes, index).extraNodeData?.name)
+    .map(index => requiredNode(nodes, index))
+    .filter(node => nodeType(node) === 1)
+    .map(node => node.extraNodeData?.name)
     .filter(name => typeof name === 'string')
     .sort()
+}
+
+function nodeType (node) {
+  if (Number.isInteger(node.flags?.command_node_type)) {
+    return node.flags.command_node_type
+  }
+  return Number.isInteger(node.flags) ? node.flags & 0x03 : undefined
 }
 
 function requiredNode (nodes, index) {

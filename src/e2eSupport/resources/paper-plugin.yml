@@ -5,8 +5,8 @@ api-version: '${apiVersion}'
 description: Isolated test-only fixtures for WorldManagement Paper E2E tests.
 default-permission: false
 dependencies:
-	server:
-		LuckPerms:
-			load: BEFORE
-			required: false
-			join-classpath: true
+  server:
+    LuckPerms:
+      load: BEFORE
+      required: true
+      join-classpath: true

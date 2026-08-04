@@ -235,6 +235,27 @@ test('a Via artifact checksum mismatch removes the download and target files', a
   assert.equal(fs.existsSync(path.join(cacheDirectory, `${fileName}.part`)), false)
 })
 
+test('an artifact download is aborted at its deadline and leaves no partial files', async (context) => {
+  const cacheDirectory = fs.mkdtempSync(path.join(os.tmpdir(), 'wm-via-timeout-'))
+  context.after(() => fs.rmSync(cacheDirectory, { recursive: true, force: true }))
+  const fileName = 'ViaVersion-timeout.jar'
+
+  await assert.rejects(resolveCheckedArtifact({
+    fileName,
+    cacheDirectory,
+    downloadUrl: 'https://example.invalid/ViaVersion-timeout.jar',
+    expectedHash: crypto.createHash('sha256').update('expected').digest('hex'),
+    hashAlgorithm: 'sha256',
+    timeoutMilliseconds: 20,
+    fetchImpl: async (_url, { signal }) => new Promise((resolve, reject) => {
+      signal.addEventListener('abort', () => reject(signal.reason), { once: true })
+    })
+  }), error => error.name === 'TimeoutError')
+
+  assert.equal(fs.existsSync(path.join(cacheDirectory, fileName)), false)
+  assert.equal(fs.existsSync(path.join(cacheDirectory, `${fileName}.part`)), false)
+})
+
 test('a valid cached SHA-512 artifact is reused without a network request', async (context) => {
   const cacheDirectory = fs.mkdtempSync(path.join(os.tmpdir(), 'wm-luckperms-cache-'))
   context.after(() => fs.rmSync(cacheDirectory, { recursive: true, force: true }))

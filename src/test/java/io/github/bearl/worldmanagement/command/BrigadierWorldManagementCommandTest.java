@@ -25,6 +25,11 @@ import io.github.bearl.worldmanagement.core.PluginIoExecutor;
 import io.github.bearl.worldmanagement.storage.InMemoryWorldMetadataRepository;
 import io.github.bearl.worldmanagement.world.WorldManagementService;
 import io.github.bearl.worldmanagement.world.WorldRegistry;
+import io.github.bearl.worldmanagement.world.WorldEnvironment;
+import io.github.bearl.worldmanagement.world.WorldIdentitySnapshot;
+import io.github.bearl.worldmanagement.world.LifecycleCapability;
+import io.github.bearl.worldmanagement.world.lifecycle.LoadedWorldCatalog;
+import io.github.bearl.worldmanagement.world.lifecycle.WorldRuntimeGateway;
 import java.lang.reflect.Proxy;
 import java.time.Duration;
 import java.util.UUID;
@@ -65,15 +70,21 @@ final class BrigadierWorldManagementCommandTest {
         assertFullyParsed(dispatcher, "wm create creative NORMAL FLAT --generator Terra:normal --seed Alpha123");
 
         assertEquals(
-            List.of("--generator", "--seed"),
+            List.of("--detached", "--generator", "--seed"),
             suggestions("wm create creative NORMAL FLAT ").getList().stream()
                 .map(suggestion -> suggestion.getText()).sorted().toList()
         );
         assertEquals(
-            List.of("--generator"),
+            List.of("--detached", "--generator"),
             suggestions("wm create creative NORMAL FLAT --seed Alpha123 ").getList().stream()
-                .map(suggestion -> suggestion.getText()).toList()
+                .map(suggestion -> suggestion.getText()).sorted().toList()
         );
+        assertEquals(
+            List.of("--generator", "--seed"),
+            suggestions("wm create creative NORMAL FLAT --detached ").getList().stream()
+                .map(suggestion -> suggestion.getText()).sorted().toList()
+        );
+        assertFullyParsed(dispatcher, "wm create creative NORMAL FLAT --detached --seed Alpha123");
     }
 
     @Test
@@ -109,6 +120,8 @@ final class BrigadierWorldManagementCommandTest {
         dispatcher.getRoot().addChild(new BrigadierWorldManagementCommand().build());
 
         assertFullyParsed(dispatcher, "wm import archive NETHER");
+        assertExecutableParsed(dispatcher, "wm import archive NETHER --detached");
+        assertExecutableParsed(dispatcher, "wm adopt archive --detached");
         assertFullyParsed(dispatcher, "wm import archive");
 
         final String input = "wm import archive ";
@@ -203,6 +216,86 @@ final class BrigadierWorldManagementCommandTest {
         assertFullyParsed(dispatcher, "wm remove creative purge confirm");
         assertFullyParsed(dispatcher, "wm unload creative lobby");
         assertFullyParsed(dispatcher, "wm delete creative lobby confirm");
+        assertExecutableParsed(dispatcher, "wm load archive NETHER --detached");
+        assertFullyParsed(dispatcher, "wm load archive --detached");
+    }
+
+    @Test
+    void lifecycleWorldCompletionIncludesActiveAndDetachedMetadata() {
+        final PluginIoExecutor executor = new PluginIoExecutor("BrigadierLifecycleCompletionTest");
+        try {
+            final WorldManagementService metadata = new WorldManagementService(
+                executor, new InMemoryWorldMetadataRepository(), new WorldRegistry()
+            );
+            metadata.load().join();
+            metadata.adopt("creative", true).join();
+            metadata.adopt("archive", true).join();
+            metadata.remove("archive").join();
+            final SuggestionCatalog catalog = new SuggestionCatalog(new OnlinePlayerSnapshot());
+            catalog.initialize(metadata);
+            final CommandDispatcher<CommandSourceStack> dispatcher = new CommandDispatcher<>();
+            dispatcher.getRoot().addChild(new BrigadierWorldManagementCommand(catalog).build());
+
+            for (final String operation : List.of("load", "unload", "delete", "remove")) {
+                final String input = "wm " + operation + " ";
+                final Suggestions suggestions = dispatcher.getCompletionSuggestions(
+                    dispatcher.parse(input, SOURCE)
+                ).join();
+                assertEquals(
+                    List.of("archive", "creative"),
+                    suggestions.getList().stream().map(suggestion -> suggestion.getText()).sorted().toList(),
+                    operation
+                );
+            }
+        } finally {
+            executor.shutdown(Duration.ofSeconds(1));
+        }
+    }
+
+    @Test
+    void lifecycleCompletionScopesUseRuntimeAndMetadataSnapshots() {
+        final PluginIoExecutor executor = new PluginIoExecutor("BrigadierRuntimeCompletionTest");
+        try {
+            final WorldManagementService metadata = new WorldManagementService(
+                executor, new InMemoryWorldMetadataRepository(), new WorldRegistry()
+            );
+            metadata.load().join();
+            metadata.adopt("creative", true).join();
+            metadata.adopt("archive", true).join();
+            metadata.remove("archive").join();
+            final LoadedWorldCatalog loadedWorlds = new LoadedWorldCatalog();
+            loadedWorlds.replaceAll(List.of(
+                new WorldRuntimeGateway.LifecycleWorld(
+                    new WorldIdentitySnapshot(
+                        "minecraft:creative",
+                        UUID.fromString("11111111-1111-1111-1111-111111111111"),
+                        WorldEnvironment.NORMAL, 0L, true
+                    ), LifecycleCapability.MANAGED
+                ),
+                new WorldRuntimeGateway.LifecycleWorld(
+                    new WorldIdentitySnapshot(
+                        "minecraft:lobby",
+                        UUID.fromString("22222222-2222-2222-2222-222222222222"),
+                        WorldEnvironment.NORMAL, 0L, true
+                    ), LifecycleCapability.MANAGED
+                )
+            ));
+            final SuggestionCatalog catalog = new SuggestionCatalog(
+                new OnlinePlayerSnapshot(), new CommandAuthorizationSnapshot(), loadedWorlds
+            );
+            catalog.initialize(metadata);
+            final BrigadierWorldManagementCommand command = new BrigadierWorldManagementCommand(catalog);
+
+            assertSuggestions(command, SOURCE, "wm load ", List.of("archive", "creative"));
+            assertSuggestions(command, SOURCE, "wm remove ", List.of("archive", "creative"));
+            assertSuggestions(command, SOURCE, "wm unload ", List.of("archive", "creative", "lobby"));
+            assertSuggestions(command, SOURCE, "wm delete ", List.of("archive", "creative", "lobby"));
+            assertSuggestions(command, SOURCE, "wm unload creative ", List.of("lobby"));
+            assertSuggestions(command, SOURCE, "wm display-name set ", List.of("archive", "creative"));
+            assertSuggestions(command, SOURCE, "wm tp self ", List.of("archive", "creative"));
+        } finally {
+            executor.shutdown(Duration.ofSeconds(1));
+        }
     }
 
     @Test
@@ -379,10 +472,34 @@ final class BrigadierWorldManagementCommandTest {
         assertEquals(expected, suggestions.getList().stream().map(suggestion -> suggestion.getText()).toList());
     }
 
+    private static void assertSuggestions(
+        final BrigadierWorldManagementCommand command,
+        final CommandSourceStack source,
+        final String input,
+        final List<String> expected
+    ) {
+        final CommandDispatcher<CommandSourceStack> dispatcher = new CommandDispatcher<>();
+        dispatcher.getRoot().addChild(command.build());
+        final Suggestions suggestions = dispatcher.getCompletionSuggestions(
+            dispatcher.parse(input, source)
+        ).join();
+        assertEquals(expected, suggestions.getList().stream().map(suggestion -> suggestion.getText()).toList());
+    }
+
     private static void assertFullyParsed(final CommandDispatcher<CommandSourceStack> dispatcher, final String input) {
         final ParseResults<CommandSourceStack> result = dispatcher.parse(input, SOURCE);
         assertTrue(result.getExceptions().isEmpty(), input);
         assertTrue(!result.getReader().canRead(), input);
+    }
+
+    private static void assertExecutableParsed(
+        final CommandDispatcher<CommandSourceStack> dispatcher,
+        final String input
+    ) {
+        final ParseResults<CommandSourceStack> result = dispatcher.parse(input, SOURCE);
+        assertTrue(result.getExceptions().isEmpty(), input);
+        assertTrue(!result.getReader().canRead(), input);
+        assertTrue(!(result.getContext().getCommand() instanceof GeneratedSyntaxFeedbackCommand), input);
     }
 
     private static CommandSourceStack commandSource() {

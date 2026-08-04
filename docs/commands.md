@@ -8,13 +8,13 @@
 
 已知指令缺少參數、固定 literal 錯誤或 terminal 後出現多餘參數時，Brigadier 會依同一 specification 回覆最近可見的 canonical usage 與 `/wm help <topic>` 提示。這些錯誤不會落到全域 unknown-command handler，也不解析 raw command text。
 
-## `/wm adopt <world>`
+## `/wm adopt <world> [--detached]`
 
 權限：`worldmanagement.command.adopt`，預設 OP。
 
-將一個已載入、尚未被 WorldManagement 登錄的世界加入管理。世界名稱只能包含英文字母、數字、底線和減號。
+將一個已載入、尚未被 WorldManagement 登錄的世界加入管理。世界名稱只能包含英文字母、數字、底線和減號。加入 `--detached` 時第一次 durable metadata mutation 直接建立為 `DETACHED`，不會先短暫進入 `ACTIVE`。
 
-此指令只建立 WorldManagement metadata，不會改變世界檔案、Paper 載入狀態或 Multiverse 等外部工具設定。
+此指令只建立 WorldManagement metadata，不會改變世界檔案、Paper 載入狀態、玩家位置或 Multiverse 等外部工具設定。`DETACHED`仍可使用 lifecycle load/unload/delete，但不套用 Warp、Ownership、Protection、自動 reconciliation 或 identity auto-mutation。
 
 ## `/wm list [detached]`
 
@@ -28,16 +28,19 @@
 
 管理員可在 template 使用完整 MiniMessage 標籤。命令參數、metadata 名稱、玩家名稱、UUID 與清單等動態值固定以純文字 placeholder 插入，不能注入顏色、click 或 hover 事件。自訂 locale 的單一 key 缺失或無效時，只回退該 key 到 JAR 內建繁中 template。
 
+Domain rejection 使用 typed status 映射至固定 locale key；例如 not managed、service loading、operation in progress、identity mismatch、storage missing 與 fallback unavailable 都有獨立原因。非預期 backend exception 只回覆固定的內部錯誤與檢查紀錄提示，不會把 exception message、stack trace 或被拒絕的原始 option token回顯給 sender。
+
 ## World Lifecycle
 
-- `/wm create <world> <NORMAL|NETHER|THE_END> <NORMAL|FLAT|AMPLIFIED|LARGE_BIOMES> [--seed <seed>] [--generator <plugin[:id]>]`：environment與world type為必填。`--seed`與`--generator`可任意排序、各只能出現一次；已輸入的flag不再出現在後續completion。generator completion只讀取主執行緒更新的有效plugin名稱不可變snapshot，仍可手動輸入`plugin:id`。generator reference會寫入metadata，後續load與補償reload無法重新解析時會拒絕載入，不會退回vanilla生成器。
-- `/wm load <world>`、`/wm unload <world> [fallback]`：metadata desired state 會先持久化，再由 Paper global scheduler 嘗試載入或卸載。卸載有玩家時，`fallback`（若指定）必須是不同且已載入的世界；未指定時使用設定 fallback 或 Paper primary world。卸載會先顯式存檔，存檔失敗時保留已載入世界並回報失敗。
-- `/wm remove <world>`：只接受 desired state 為 `UNLOADED` 的世界，將 metadata 標記為 `DETACHED`，保留世界檔案與 metadata。
-- `/wm manage <world>`：將 `DETACHED` metadata 重新設為受管理的 `ACTIVE` 世界。
-- `/wm remove <world> purge confirm`：只永久清除 `DETACHED` 世界的 metadata，不刪除世界檔案；effective audit policy為`STRICT`時，admission持久化失敗會拒絕purge並保留`DETACHED` metadata。
-- `/wm import <world>`：只匯入 world container 內具備 `level.dat` 的安全目錄。
-- `/wm delete <world> [fallback] confirm`：刪除受管世界。若世界已載入且有玩家，會優先使用指定的 `fallback`，否則使用設定 fallback 或 Paper primary world；玩家全數成功傳送後才會顯式存檔並卸載。此時世界檔案與metadata仍保留，指令會要求再次執行相同confirmed delete。第二次操作確認世界仍未載入後，會在I/O executor移入quarantine、持久化`DELETING` tombstone，接著於同一runtime永久刪除storage並purge metadata。若tombstone後的永久storage delete或metadata purge失敗，指令會回報等待重啟並保留可由startup recovery完成的狀態；tombstone前的存檔、卸載、metadata更新、重新載入檢查或補償失敗仍會保留或還原可恢復資料。
-- `/wm tp self <world> [x y z]`：將自己傳送到受管世界 spawn 或指定座標。
+- `/wm create <world> <NORMAL|NETHER|THE_END> <NORMAL|FLAT|AMPLIFIED|LARGE_BIOMES> [--seed <seed>] [--generator <plugin[:id]>] [--detached]`：environment與world type為必填。`--seed`、`--generator`與`--detached`可任意排序、各只能出現一次；已輸入的flag不再出現在後續completion。generator completion只讀取主執行緒更新的有效plugin名稱不可變snapshot，仍可手動輸入`plugin:id`。generator reference會寫入metadata，後續load與補償reload無法重新解析時會拒絕載入，不會退回vanilla生成器。`--detached`建立世界但不套用 Warp/Ownership/Protection 管理；世界仍可使用 `/wm load`、`/wm unload` 與 `/wm delete`。無旗標維持既有 ACTIVE 行為。
+- `/wm load <world>`、`/wm load <world> <NORMAL|NETHER|THE_END> --detached`：既有語法載入ACTIVE或DETACHED metadata world；新語法只接受尚無metadata、未載入且具有安全storage claim的world，載入後直接保存DETACHED metadata。`--detached`缺少environment時不可執行。
+- `/wm unload <world> [fallback]`：ACTIVE/DETACHED在成功save/unload後持久化`UNLOADED` desired state；失敗時保留原intent。目前已載入但unknown的world也可執行runtime-only unload，不建立或修改metadata。卸載先以Paper `World.save(true)`顯式存檔，成功後才以`save=false`卸載。fallback可為任一不同、唯一且已載入的runtime world，identity在傳送前後都會重驗。
+- `/wm remove <world>`：將ACTIVE metadata標記為DETACHED，保留世界檔案與metadata。世界不需先卸載；已載入時玩家留在原地、runtime保持不變，僅停用Warp/Ownership/Protection與自動reconciliation。
+- `/wm manage <world>`：將DETACHED metadata重新設為ACTIVE。採用目前runtime loaded/unloaded狀態作為新desired state；若identity不符則拒絕。
+- `/wm remove <world> purge confirm`：只永久清除DETACHED世界的metadata，不刪除世界檔案；effective audit policy為`STRICT`時，admission持久化失敗會拒絕purge並保留DETACHED metadata。
+- `/wm import <world> <NORMAL|NETHER|THE_END> [--detached]`：只匯入 world container 內具備 `level.dat` 的安全目錄。`--detached`第一次 durable metadata mutation即建立為DETACHED，不會先啟用治理；runtime仍依匯入流程載入，之後可用lifecycle工具操作。
+- `/wm delete <world> [fallback] confirm`：每次只刪除一個指定world。除ACTIVE/DETACHED外，目前唯一載入的unknown world會先以exact runtime identity建立`DELETE_AUTO` DETACHED metadata；adoption失敗、identity ambiguous/replaced或runtime消失時安全拒絕，不按名稱刪storage。loaded world第一次confirmed delete完成玩家搬移、save與unload；再次確認後將storage移入quarantine並以identity/version/transaction CAS持久化`DELETING`。同一runtime只回覆等待重啟；startup recovery核對exact tombstone後才永久刪除quarantine並purge metadata，包括ephemeral `DELETE_AUTO` record。若tombstone寫入期間world被外部重載，runtime會被隔離並回報需停止伺服器檢查live與quarantine資料。
+- `/wm tp self <world> [x y z]`：將自己傳送到ACTIVE或DETACHED world spawn或指定座標。ACTIVE套用owner/rank/access治理；DETACHED只要求command permission與verified loaded identity，不套用WorldManagement治理。
 - `/wm tp player <online-player> <world> [x y z]`：傳送指定的線上玩家。
 - `/wm tp --any <world> [x y z]`：使用顯式 access bypass 進行自我傳送。
 
@@ -55,7 +58,7 @@
 - `/wm identity sync <world>`：只接受`SYNC_PENDING`。當durable identity相同但snapshot欄位有差異時，以目前觀察值更新metadata並恢復`VERIFIED`。
 - `/wm identity accept-replacement <world> confirm <clear-warps|keep-warps>`：只接受`CONFLICT`。明確採用replacement identity，並由管理員選擇清除或保留舊Warp；若replacement key/UUID與其他metadata衝突則拒絕。
 - `/wm identity abandon <world> confirm`：只接受尚未`VERIFIED`的ACTIVE world，將其改為`DETACHED`與`UNLOADED` intent，保留metadata與世界資料。
-- `/wm display-name set <world> <display-name...>`、`/wm display-name reset <world>`：設定或重設metadata顯示名稱。display name支援受驗證的MiniMessage，world ID、Paper key與Bukkit runtime名稱不會被改名。
+- `/wm display-name set <world> <display-name...>`、`/wm display-name reset <world>`：設定或重設ACTIVE或DETACHED metadata顯示名稱；DELETING與完全unknown world拒絕。display name支援受驗證的MiniMessage，world ID、Paper key與Bukkit runtime名稱不會被改名。
 
 權限分別為`worldmanagement.command.identity.show`、`.sync`、`.accept-replacement`、`.abandon`與`worldmanagement.command.display-name.set|reset`，預設OP。identity未驗證時，entry、Warp與一般lifecycle操作會fail closed；即使玩家具備protection bypass，直接傳送或登入/respawn進入replacement world也會被拒絕或移至安全fallback。
 

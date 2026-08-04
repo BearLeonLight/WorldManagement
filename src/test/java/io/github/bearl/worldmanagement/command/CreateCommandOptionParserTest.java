@@ -1,9 +1,11 @@
 package io.github.bearl.worldmanagement.command;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 
 import com.mojang.brigadier.StringReader;
+import com.mojang.brigadier.exceptions.CommandSyntaxException;
 import java.util.Optional;
 import java.util.OptionalLong;
 import org.junit.jupiter.api.Test;
@@ -54,6 +56,20 @@ final class CreateCommandOptionParserTest {
     })
     void rejectsInvalidOptionTails(final String input) {
         assertThrows(IllegalArgumentException.class, () -> parse(input));
+    }
+
+    @Test
+    void brigadierErrorDoesNotExposeRejectedOptionText() {
+        final CreateCommandOptionsArgument argument = new CreateCommandOptionsArgument(java.util.List::of);
+
+        final CommandSyntaxException exception = assertThrows(
+            CommandSyntaxException.class,
+            () -> argument.parse(new StringReader("--unknown secret-value"))
+        );
+
+        assertEquals("Invalid create options.", exception.getRawMessage().getString());
+        assertFalse(exception.getMessage().contains("--unknown"));
+        assertFalse(exception.getMessage().contains("secret-value"));
     }
 
     private CreateCommandOptions parse(final String input) {

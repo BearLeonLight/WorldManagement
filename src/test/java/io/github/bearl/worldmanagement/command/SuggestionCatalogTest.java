@@ -15,6 +15,8 @@ import io.github.bearl.worldmanagement.world.WorldMetadata;
 import io.github.bearl.worldmanagement.world.WorldRegistry;
 import io.github.bearl.worldmanagement.world.WorldWarp;
 import io.github.bearl.worldmanagement.world.WarpVisibility;
+import io.github.bearl.worldmanagement.world.lifecycle.LoadedWorldCatalog;
+import io.github.bearl.worldmanagement.world.lifecycle.WorldRuntimeGateway;
 import java.lang.reflect.Proxy;
 import java.time.Duration;
 import java.util.List;
@@ -25,6 +27,60 @@ import org.bukkit.entity.Player;
 import org.junit.jupiter.api.Test;
 
 final class SuggestionCatalogTest {
+
+    @Test
+    void lifecycleWorldsIncludeActiveAndDetachedMetadata() {
+        final PluginIoExecutor executor = new PluginIoExecutor("SuggestionCatalogLifecycleTest");
+        try {
+            final WorldManagementService metadata = new WorldManagementService(
+                executor, new InMemoryWorldMetadataRepository(), new WorldRegistry()
+            );
+            metadata.load().join();
+            metadata.adopt("creative", true).join();
+            metadata.adopt("archive", true).join();
+            metadata.remove("archive").join();
+            final SuggestionCatalog catalog = new SuggestionCatalog(new OnlinePlayerSnapshot());
+            catalog.initialize(metadata);
+
+            assertEquals(List.of("archive", "creative"), catalog.lifecycleWorlds());
+            assertEquals(List.of("creative"), catalog.managedWorlds());
+            assertEquals(List.of("archive"), catalog.detachedWorlds());
+        } finally {
+            executor.shutdown(Duration.ofSeconds(1));
+        }
+    }
+
+    @Test
+    void runtimeBackedTargetsIncludeOnlyUniqueLoadedWorldIds() {
+        final PluginIoExecutor executor = new PluginIoExecutor("SuggestionCatalogRuntimeTest");
+        try {
+            final WorldManagementService metadata = new WorldManagementService(
+                executor, new InMemoryWorldMetadataRepository(), new WorldRegistry()
+            );
+            metadata.load().join();
+            metadata.adopt("creative", true).join();
+            metadata.adopt("archive", true).join();
+            metadata.remove("archive").join();
+            final LoadedWorldCatalog loadedWorlds = new LoadedWorldCatalog();
+            loadedWorlds.replaceAll(List.of(
+                runtimeWorld("creative", "11111111-1111-1111-1111-111111111111"),
+                runtimeWorld("lobby", "22222222-2222-2222-2222-222222222222"),
+                runtimeWorld("ambiguous", "33333333-3333-3333-3333-333333333333"),
+                runtimeWorld("ambiguous", "44444444-4444-4444-4444-444444444444")
+            ));
+            final SuggestionCatalog catalog = new SuggestionCatalog(
+                new OnlinePlayerSnapshot(), new CommandAuthorizationSnapshot(), loadedWorlds
+            );
+            catalog.initialize(metadata);
+
+            assertEquals(List.of("archive", "creative", "lobby"), catalog.lifecycleTargets());
+            assertEquals(List.of("creative", "lobby"), catalog.fallbackTargets());
+            assertEquals(List.of("archive", "creative"), catalog.displayNameWorlds());
+            assertEquals(List.of("archive", "creative"), catalog.lifecycleWorlds());
+        } finally {
+            executor.shutdown(Duration.ofSeconds(1));
+        }
+    }
 
     @Test
     void manageableWorldsFollowImmutableOwnershipAuthorizationScope() {
@@ -168,6 +224,18 @@ final class SuggestionCatalogTest {
 
     private static Player player(final UUID playerId, final String name) {
         return player(playerId, name, Set.of());
+    }
+
+    private static WorldRuntimeGateway.LifecycleWorld runtimeWorld(
+        final String worldId,
+        final String uuid
+    ) {
+        return new WorldRuntimeGateway.LifecycleWorld(
+            new WorldIdentitySnapshot(
+                "minecraft:" + worldId, UUID.fromString(uuid), WorldEnvironment.NORMAL, 0L, true
+            ),
+            LifecycleCapability.MANAGED
+        );
     }
 
     private static Player player(final UUID playerId, final String name, final Set<String> permissions) {

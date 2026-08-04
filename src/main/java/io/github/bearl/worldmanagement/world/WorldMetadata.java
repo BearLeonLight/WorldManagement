@@ -26,7 +26,9 @@ public record WorldMetadata(
     Map<String, Rank> ranks,
     Map<UUID, String> playerRanks,
     Map<String, WorldWarp> warps,
-    long version
+    long version,
+    Optional<UUID> deletionTransactionId,
+    WorldRegistrationSource registrationSource
 ) {
 
     public static final String OWNER_RANK = "OWNER";
@@ -61,11 +63,43 @@ public record WorldMetadata(
         if (version < 0) {
             throw new IllegalArgumentException("version must not be negative.");
         }
+        deletionTransactionId = Objects.requireNonNull(deletionTransactionId, "deletionTransactionId");
+        Objects.requireNonNull(registrationSource, "registrationSource");
+        if (managementState != WorldManagementState.DELETING && deletionTransactionId.isPresent()) {
+            throw new IllegalArgumentException("Only DELETING metadata may contain a deletion transaction.");
+        }
 
         ranks = immutableRanks(ranks);
         playerRanks = Map.copyOf(playerRanks);
         warps = immutableWarps(warps);
         validateRanks(ranks, playerRanks);
+    }
+
+    public WorldMetadata(
+        final String worldName,
+        final String displayName,
+        final WorldIdentitySnapshot identity,
+        final IdentityVerificationState identityState,
+        final LifecycleCapability lifecycleCapability,
+        final Optional<WorldIdentitySnapshot> pendingIdentity,
+        final Optional<RequestedWorldType> requestedWorldType,
+        final Optional<WorldGeneratorReference> generator,
+        final WorldManagementState managementState,
+        final WorldLoadState desiredState,
+        final String owner,
+        final boolean rankSystemEnabled,
+        final AccessControl accessControl,
+        final Map<String, Rank> ranks,
+        final Map<UUID, String> playerRanks,
+        final Map<String, WorldWarp> warps,
+        final long version
+    ) {
+        this(
+            worldName, displayName, identity, identityState, lifecycleCapability, pendingIdentity,
+            requestedWorldType, generator, managementState, desiredState, owner, rankSystemEnabled,
+            accessControl, ranks, playerRanks, warps, version, Optional.empty(),
+            WorldRegistrationSource.STANDARD
+        );
     }
 
     public WorldMetadata(
@@ -186,6 +220,41 @@ public record WorldMetadata(
         final Optional<WorldGeneratorReference> generator,
         final boolean rankSystemEnabled
     ) {
+        return createDefault(
+            worldName, identity, lifecycleCapability, requestedWorldType, generator,
+            WorldManagementState.ACTIVE, rankSystemEnabled
+        );
+    }
+
+    public static WorldMetadata createDefault(
+        final String worldName,
+        final WorldIdentitySnapshot identity,
+        final LifecycleCapability lifecycleCapability,
+        final Optional<RequestedWorldType> requestedWorldType,
+        final Optional<WorldGeneratorReference> generator,
+        final WorldManagementState managementState,
+        final boolean rankSystemEnabled
+    ) {
+        return createDefault(
+            worldName, identity, lifecycleCapability, requestedWorldType, generator,
+            managementState, WorldRegistrationSource.STANDARD, rankSystemEnabled
+        );
+    }
+
+    public static WorldMetadata createDefault(
+        final String worldName,
+        final WorldIdentitySnapshot identity,
+        final LifecycleCapability lifecycleCapability,
+        final Optional<RequestedWorldType> requestedWorldType,
+        final Optional<WorldGeneratorReference> generator,
+        final WorldManagementState managementState,
+        final WorldRegistrationSource registrationSource,
+        final boolean rankSystemEnabled
+    ) {
+        final WorldManagementState initialState = Objects.requireNonNull(managementState, "managementState");
+        if (initialState != WorldManagementState.ACTIVE && initialState != WorldManagementState.DETACHED) {
+            throw new IllegalArgumentException("New metadata must be ACTIVE or DETACHED.");
+        }
         return new WorldMetadata(
             worldName,
             worldName,
@@ -195,7 +264,7 @@ public record WorldMetadata(
             Optional.empty(),
             requestedWorldType,
             generator,
-            WorldManagementState.ACTIVE,
+            initialState,
             WorldLoadState.LOADED,
             SERVER_OWNER,
             rankSystemEnabled,
@@ -206,7 +275,9 @@ public record WorldMetadata(
             ),
             Map.of(),
             Map.of(),
-            0
+            0,
+            Optional.empty(),
+            Objects.requireNonNull(registrationSource, "registrationSource")
         );
     }
 
@@ -228,7 +299,9 @@ public record WorldMetadata(
             ranks,
             playerRanks,
             warps,
-            version + 1
+            version + 1,
+            deletionTransactionId,
+            registrationSource
         );
     }
 
@@ -258,7 +331,9 @@ public record WorldMetadata(
             ranks,
             playerRanks,
             warps,
-            version + 1
+            version + 1,
+            deletionTransactionId,
+            registrationSource
         );
     }
 
@@ -280,7 +355,9 @@ public record WorldMetadata(
             ranks,
             playerRanks,
             warps,
-            version + 1
+            version + 1,
+            deletionTransactionId,
+            registrationSource
         );
     }
 
@@ -289,7 +366,8 @@ public record WorldMetadata(
             worldName, displayName, identity, identityState, lifecycleCapability, pendingIdentity, requestedWorldType, generator,
             managementState,
             Objects.requireNonNull(updatedDesiredState, "updatedDesiredState"),
-            owner, rankSystemEnabled, accessControl, ranks, playerRanks, warps, version + 1
+            owner, rankSystemEnabled, accessControl, ranks, playerRanks, warps, version + 1,
+            deletionTransactionId, registrationSource
         );
     }
 
@@ -297,7 +375,30 @@ public record WorldMetadata(
         return new WorldMetadata(
             worldName, displayName, identity, identityState, lifecycleCapability, pendingIdentity, requestedWorldType, generator,
             Objects.requireNonNull(updatedManagementState, "updatedManagementState"), desiredState,
-            owner, rankSystemEnabled, accessControl, ranks, playerRanks, warps, version + 1
+            owner, rankSystemEnabled, accessControl, ranks, playerRanks, warps, version + 1,
+            Optional.empty(), registrationSource
+        );
+    }
+
+    public WorldMetadata withDeleting(final UUID transactionId) {
+        return new WorldMetadata(
+            worldName, displayName, identity, identityState, lifecycleCapability, pendingIdentity,
+            requestedWorldType, generator, WorldManagementState.DELETING, desiredState, owner,
+            rankSystemEnabled, accessControl, ranks, playerRanks, warps, version + 1,
+            Optional.of(Objects.requireNonNull(transactionId, "transactionId")), registrationSource
+        );
+    }
+
+    public WorldMetadata withManagementAndDesiredState(
+        final WorldManagementState updatedManagementState,
+        final WorldLoadState updatedDesiredState
+    ) {
+        return new WorldMetadata(
+            worldName, displayName, identity, identityState, lifecycleCapability, pendingIdentity, requestedWorldType, generator,
+            Objects.requireNonNull(updatedManagementState, "updatedManagementState"),
+            Objects.requireNonNull(updatedDesiredState, "updatedDesiredState"),
+            owner, rankSystemEnabled, accessControl, ranks, playerRanks, warps, version + 1,
+            Optional.empty(), registrationSource
         );
     }
 
@@ -474,7 +575,9 @@ public record WorldMetadata(
             ranks,
             playerRanks,
             warps,
-            version + 1
+            version + 1,
+            Optional.empty(),
+            registrationSource
         );
     }
 
@@ -509,7 +612,9 @@ public record WorldMetadata(
             updatedRanks,
             updatedPlayerRanks,
             updatedWarps,
-            version + 1
+            version + 1,
+            deletionTransactionId,
+            registrationSource
         );
     }
 
@@ -531,7 +636,9 @@ public record WorldMetadata(
             ranks,
             playerRanks,
             warps,
-            version + 1
+            version + 1,
+            deletionTransactionId,
+            registrationSource
         );
     }
 
@@ -559,7 +666,9 @@ public record WorldMetadata(
             ranks,
             playerRanks,
             updatedWarps,
-            version + 1
+            version + 1,
+            deletionTransactionId,
+            registrationSource
         );
     }
 

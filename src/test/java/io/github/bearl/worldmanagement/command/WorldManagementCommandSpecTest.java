@@ -68,7 +68,7 @@ final class WorldManagementCommandSpecTest {
     }
 
     @Test
-    void productionCreateUsageRequiresEnvironmentAndTypeBeforeOptionalFlags() {
+    void productionLifecycleUsageIncludesDetachedCreationModes() {
         final WorldManagementCommandSpec specification = new WorldManagementCommandSpec(
             new SuggestionCatalog(new OnlinePlayerSnapshot())
         );
@@ -76,11 +76,35 @@ final class WorldManagementCommandSpecTest {
             .filter(node -> node.id().equals("create"))
             .findFirst()
             .orElseThrow();
+        final CommandNodeSpec adopt = specification.root().children().stream()
+            .filter(node -> node.id().equals("adopt"))
+            .findFirst()
+            .orElseThrow();
+        final CommandNodeSpec importWorld = specification.root().children().stream()
+            .filter(node -> node.id().equals("import"))
+            .findFirst()
+            .orElseThrow();
+        final CommandNodeSpec load = specification.root().children().stream()
+            .filter(node -> node.id().equals("load"))
+            .findFirst()
+            .orElseThrow();
 
         assertEquals(List.of(
             "/wm create <world> <environment> <world-type>",
-            "/wm create <world> <environment> <world-type> [--seed <seed>] [--generator <plugin[:id]>]"
+            "/wm create <world> <environment> <world-type> [--seed <seed>] [--generator <plugin[:id]>] [--detached]"
         ), create.usageLines("wm"));
+        assertEquals(List.of(
+            "/wm adopt <world>",
+            "/wm adopt <world> --detached"
+        ), adopt.usageLines("wm"));
+        assertEquals(List.of(
+            "/wm import <world> <environment>",
+            "/wm import <world> <environment> --detached"
+        ), importWorld.usageLines("wm"));
+        assertEquals(List.of(
+            "/wm load <world>",
+            "/wm load <world> <environment> --detached"
+        ), load.usageLines("wm"));
     }
 
     @Test

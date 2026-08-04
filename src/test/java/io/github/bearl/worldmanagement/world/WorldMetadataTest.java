@@ -294,6 +294,27 @@ final class WorldMetadataTest {
     }
 
     @Test
+    void preservesDeleteAutoRegistrationSourceAcrossLifecycleTransitions() {
+        final WorldMetadata metadata = WorldMetadata.createDefault(
+            "creative",
+            creativeIdentity(),
+            LifecycleCapability.MANAGED,
+            Optional.empty(),
+            Optional.empty(),
+            WorldManagementState.DETACHED,
+            WorldRegistrationSource.DELETE_AUTO,
+            true
+        );
+
+        final WorldMetadata deleting = metadata
+            .withDesiredState(WorldLoadState.UNLOADED)
+            .withDeleting(UUID.fromString("aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa"));
+
+        assertEquals(WorldRegistrationSource.DELETE_AUTO, deleting.registrationSource());
+        assertEquals(WorldRegistrationSource.STANDARD, WorldMetadata.createDefault("standard", true).registrationSource());
+    }
+
+    @Test
     void rejectsPlayerMappingsToUnknownRanks() {
         final UUID playerId = UUID.randomUUID();
 

@@ -1,5 +1,6 @@
 package io.github.bearl.worldmanagement.command;
 
+import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import io.github.bearl.worldmanagement.audit.AuditPolicy;
@@ -13,7 +14,13 @@ import io.github.bearl.worldmanagement.storage.InMemoryWorldMetadataRepository;
 import io.github.bearl.worldmanagement.storage.StorageConfiguration;
 import io.github.bearl.worldmanagement.storage.StorageException;
 import io.github.bearl.worldmanagement.storage.StorageMigrationService;
+import io.github.bearl.worldmanagement.storage.StorageMigrationService.MigrationStatus;
 import io.github.bearl.worldmanagement.world.WorldAccessPolicy;
+import io.github.bearl.worldmanagement.world.AccessControl;
+import io.github.bearl.worldmanagement.world.AccessMode;
+import io.github.bearl.worldmanagement.world.VerifiedWorldRef;
+import io.github.bearl.worldmanagement.world.WorldIdentitySnapshot;
+import io.github.bearl.worldmanagement.world.LifecycleCapability;
 import io.github.bearl.worldmanagement.world.WorldManagementService;
 import io.github.bearl.worldmanagement.world.WorldRegistry;
 import io.github.bearl.worldmanagement.world.lifecycle.PaperWorldStorageGateway;
@@ -28,7 +35,13 @@ import java.nio.file.Path;
 import java.time.Duration;
 import java.util.Map;
 import java.util.Optional;
+import java.util.Set;
+import java.util.UUID;
 import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.atomic.AtomicInteger;
+import java.util.concurrent.atomic.AtomicReference;
+import java.util.concurrent.TimeUnit;
+import net.kyori.adventure.text.Component;
 import java.util.logging.Logger;
 import org.bukkit.Location;
 import org.bukkit.command.CommandSender;
@@ -40,6 +53,36 @@ final class WorldManagementCommandTest {
 
     @TempDir
     Path temporaryDirectory;
+
+    @Test
+    void mapsLifecycleDomainStatusesToSpecificMessages() {
+        assertEquals("command.create.already-exists", WorldManagementCommand.createResultKey(
+            "command.create", false, WorldLifecycleCoordinator.CreateStatus.ALREADY_EXISTS));
+        assertEquals("command.create.operation-in-progress", WorldManagementCommand.createResultKey(
+            "command.create", false, WorldLifecycleCoordinator.CreateStatus.OPERATION_IN_PROGRESS));
+        assertEquals("command.import.already-exists", WorldManagementCommand.createResultKey(
+            "command.import", true, WorldLifecycleCoordinator.CreateStatus.ALREADY_EXISTS));
+        assertEquals("command.loading", WorldManagementCommand.createResultKey(
+            "command.import", false, WorldLifecycleCoordinator.CreateStatus.NOT_READY));
+        assertEquals("command.remove.operation-in-progress", WorldManagementCommand.removeResultKey(
+            WorldLifecycleCoordinator.RemoveStatus.OPERATION_IN_PROGRESS));
+        assertEquals("command.loading", WorldManagementCommand.removeResultKey(
+            WorldLifecycleCoordinator.RemoveStatus.NOT_READY));
+        assertEquals("command.lifecycle.operation-in-progress", WorldManagementCommand.lifecycleResultKey(
+            WorldLifecycleCoordinator.LifecycleStatus.OPERATION_IN_PROGRESS));
+        assertEquals("command.loading", WorldManagementCommand.lifecycleResultKey(
+            WorldLifecycleCoordinator.LifecycleStatus.NOT_READY));
+        assertEquals("command.adopt.operation-in-progress", WorldManagementCommand.adoptResultKey(
+            WorldLifecycleCoordinator.AdoptStatus.OPERATION_IN_PROGRESS, false));
+        assertEquals("command.storage.source-not-active", WorldManagementCommand.storageResultKey(
+            MigrationStatus.SOURCE_NOT_ACTIVE));
+        assertEquals("command.storage.same-provider", WorldManagementCommand.storageResultKey(
+            MigrationStatus.SAME_PROVIDER));
+        assertEquals("command.storage.target-not-configured", WorldManagementCommand.storageResultKey(
+            MigrationStatus.TARGET_NOT_CONFIGURED));
+        assertEquals("command.storage.target-not-empty", WorldManagementCommand.storageResultKey(
+            MigrationStatus.TARGET_NOT_EMPTY));
+    }
 
     @Test
     void strictAuditRejectionLeavesDetachedMetadataUntouched() {
@@ -100,6 +143,147 @@ final class WorldManagementCommandTest {
         }
     }
 
+    @Test
+    void detachedTeleportSkipsWorldManagementGovernance() {
+        final PluginIoExecutor executor = new PluginIoExecutor("CommandTeleportTest");
+        try {
+            final WorldManagementService metadata = new WorldManagementService(
+                executor, new InMemoryWorldMetadataRepository(), new WorldRegistry()
+            );
+            metadata.load().join();
+            metadata.adopt("creative", true).join();
+            metadata.update("creative", world -> world.withAccessControl(
+                new AccessControl(AccessMode.WHITELIST, Set.of())
+            )).join();
+            final ImmediateDispatcher dispatcher = new ImmediateDispatcher();
+            final AuditService audit = new AuditService(
+                executor,
+                event -> { },
+                Logger.getLogger("CommandTeleportTest"),
+                AuditPolicy.BEST_EFFORT
+            );
+            final WorldLifecycleCoordinator lifecycle = new WorldLifecycleCoordinator(
+                new EmptyRuntimeGateway(), metadata, true, executor,
+                new PaperWorldStorageGateway(
+                    temporaryDirectory, temporaryDirectory, new WorldNameValidator(),
+                    new WorldDirectoryRemover(new WorldNameValidator())
+                ),
+                Duration.ZERO, dispatcher, Optional.empty()
+            );
+            final MessageService messages = MessageService.load(
+                temporaryDirectory, "zh_TW", java.util.Objects.requireNonNull(
+                    WorldManagementCommandTest.class.getResourceAsStream("/messages_zh_TW.yml")
+                ), ignored -> { }
+            );
+            final AtomicInteger teleports = new AtomicInteger();
+            final AtomicReference<VerifiedWorldRef> target = new AtomicReference<>();
+            final WorldManagementCommand command = new WorldManagementCommand(
+                metadata,
+                new WorldNameValidator(),
+                dispatcher,
+                lifecycle,
+                new WarpService(metadata, new WorldAccessPolicy()),
+                (playerId, worldName, warp) -> CompletableFuture.completedFuture(false),
+                (playerId, world, coordinates) -> {
+                    teleports.incrementAndGet();
+                    target.set(world);
+                    return CompletableFuture.completedFuture(true);
+                },
+                audit,
+                true,
+                5,
+                new StorageMigrationService(
+                    executor, StorageConfiguration.defaults(), Map.of(), temporaryDirectory
+                ),
+                messages,
+                new CommandMessageSender(dispatcher),
+                new OnlinePlayerSnapshot()
+            );
+            final UUID playerId = UUID.fromString("22222222-2222-2222-2222-222222222222");
+            final org.bukkit.entity.Player sender = player(playerId);
+
+            command.execute(sender, new String[] {"tp", "self", "creative"});
+            assertEquals(0, teleports.get());
+
+            metadata.remove("creative").join();
+            command.execute(sender, new String[] {"tp", "self", "creative"});
+
+            assertEquals(1, teleports.get());
+            assertEquals(
+                VerifiedWorldRef.from(metadata.detachedWorld("creative").orElseThrow()).orElseThrow(),
+                target.get()
+            );
+        } finally {
+            executor.shutdown(Duration.ofSeconds(1));
+        }
+    }
+
+    @Test
+    void loadsUnknownStorageAsDetachedMetadataFromCommand() throws Exception {
+        final PluginIoExecutor executor = new PluginIoExecutor("CommandDetachedLoadTest");
+        try {
+            createPaperStorage("archive");
+            final WorldManagementService metadata = new WorldManagementService(
+                executor, new InMemoryWorldMetadataRepository(), new WorldRegistry()
+            );
+            metadata.load().join();
+            final ImmediateDispatcher dispatcher = new ImmediateDispatcher();
+            final LoadingRuntimeGateway runtime = new LoadingRuntimeGateway();
+            final WorldLifecycleCoordinator lifecycle = new WorldLifecycleCoordinator(
+                runtime, metadata, true, executor,
+                new PaperWorldStorageGateway(
+                    temporaryDirectory, temporaryDirectory, new WorldNameValidator(),
+                    new WorldDirectoryRemover(new WorldNameValidator())
+                ),
+                Duration.ZERO, dispatcher, Optional.empty()
+            );
+            final AuditService audit = new AuditService(
+                executor, event -> { }, Logger.getLogger("CommandDetachedLoadTest"),
+                AuditPolicy.BEST_EFFORT
+            );
+            final MessageService messages = MessageService.load(
+                temporaryDirectory, "zh_TW", java.util.Objects.requireNonNull(
+                    WorldManagementCommandTest.class.getResourceAsStream("/messages_zh_TW.yml")
+                ), ignored -> { }
+            );
+            final WorldManagementCommand command = new WorldManagementCommand(
+                metadata, new WorldNameValidator(), dispatcher, lifecycle,
+                new WarpService(metadata, new WorldAccessPolicy()),
+                (playerId, worldName, warp) -> CompletableFuture.completedFuture(false),
+                (playerId, world, coordinates) -> CompletableFuture.completedFuture(false),
+                audit, true, 5,
+                new StorageMigrationService(
+                    executor, StorageConfiguration.defaults(), Map.of(), temporaryDirectory
+                ),
+                messages, new CommandMessageSender(dispatcher), new OnlinePlayerSnapshot()
+            );
+
+            final RespondingSender sender = new RespondingSender();
+            command.execute(sender.sender, new String[] {
+                "load", "archive", "NETHER", "--detached"
+            });
+            sender.response.get(2, TimeUnit.SECONDS);
+
+            assertTrue(runtime.loaded);
+            assertEquals(WorldRuntimeGateway.WorldEnvironment.NETHER, runtime.environment);
+            assertTrue(metadata.managedWorld("archive").isEmpty());
+            assertTrue(metadata.detachedWorld("archive").isPresent());
+        } finally {
+            executor.shutdown(Duration.ofSeconds(1));
+        }
+    }
+
+    private void createPaperStorage(final String worldId) throws Exception {
+        final Path data = java.nio.file.Files.createDirectories(
+            temporaryDirectory.resolve("dimensions").resolve("minecraft").resolve(worldId).resolve("data")
+        );
+        java.nio.file.Files.createDirectories(data.resolve("minecraft"));
+        java.nio.file.Files.createDirectories(data.resolve("paper"));
+        java.nio.file.Files.writeString(data.resolve("minecraft").resolve("world_gen_settings.dat"), "worldgen");
+        java.nio.file.Files.writeString(data.resolve("paper").resolve("metadata.dat"), "metadata");
+        java.nio.file.Files.writeString(data.resolve("paper").resolve("level_overrides.dat"), "overrides");
+    }
+
     private static CommandSender permittedSender() {
         return (CommandSender) Proxy.newProxyInstance(
             CommandSender.class.getClassLoader(),
@@ -110,6 +294,41 @@ final class WorldManagementCommandTest {
                 case "equals" -> instance == arguments[0];
                 case "hashCode" -> System.identityHashCode(instance);
                 default -> defaultValue(method.getReturnType());
+            }
+        );
+    }
+
+    private static org.bukkit.entity.Player player(final UUID playerId) {
+        return (org.bukkit.entity.Player) Proxy.newProxyInstance(
+            org.bukkit.entity.Player.class.getClassLoader(),
+            new Class<?>[] {org.bukkit.entity.Player.class},
+            (instance, method, arguments) -> switch (method.getName()) {
+                case "hasPermission" -> "worldmanagement.command.tp".equals(arguments[0]);
+                case "getUniqueId" -> playerId;
+                case "getName" -> "Player";
+                case "equals" -> instance == arguments[0];
+                case "hashCode" -> System.identityHashCode(instance);
+                default -> defaultValue(method.getReturnType());
+            }
+        );
+    }
+
+    private static final class RespondingSender {
+        private final CompletableFuture<Component> response = new CompletableFuture<>();
+        private final CommandSender sender = (CommandSender) Proxy.newProxyInstance(
+            CommandSender.class.getClassLoader(),
+            new Class<?>[] {CommandSender.class},
+            (instance, method, arguments) -> {
+                if (method.getName().equals("hasPermission")) return true;
+                if (method.getName().equals("getName")) return "console";
+                if (method.getName().equals("sendMessage") && arguments != null) {
+                    for (final Object argument : arguments) {
+                        if (argument instanceof Component component) response.complete(component);
+                    }
+                }
+                if (method.getName().equals("equals")) return instance == arguments[0];
+                if (method.getName().equals("hashCode")) return System.identityHashCode(instance);
+                return defaultValue(method.getReturnType());
             }
         );
     }
@@ -162,6 +381,9 @@ final class WorldManagementCommandTest {
         public boolean unload(final LifecycleWorld world, final boolean save) { return false; }
 
         @Override
+        public boolean save(final LifecycleWorld world) { return true; }
+
+        @Override
         public java.util.Optional<LifecycleWorld> findWorld(
             final io.github.bearl.worldmanagement.world.VerifiedWorldRef expected
         ) { return java.util.Optional.empty(); }
@@ -184,5 +406,80 @@ final class WorldManagementCommandTest {
             final LifecycleWorld source,
             final LifecycleWorld target
         ) { return CompletableFuture.completedFuture(false); }
+
+        @Override
+        public CompletableFuture<Void> beginShutdown() { return CompletableFuture.completedFuture(null); }
+    }
+
+    private static final class LoadingRuntimeGateway implements WorldRuntimeGateway {
+        private boolean loaded;
+        private WorldEnvironment environment;
+        private LifecycleWorld world;
+
+        @Override
+        public boolean canMutateWorldsNow() { return true; }
+
+        @Override
+        public LifecycleWorld create(
+            final String worldName, final WorldEnvironment environment,
+            final WorldType type, final Long seed
+        ) { return null; }
+
+        @Override
+        public LoadResult loadUnmanaged(final String worldName, final WorldEnvironment environment) {
+            this.environment = environment;
+            this.loaded = true;
+            this.world = new LifecycleWorld(
+                new WorldIdentitySnapshot(
+                    "minecraft:" + worldName,
+                    UUID.fromString("11111111-1111-1111-1111-111111111111"),
+                    io.github.bearl.worldmanagement.world.WorldEnvironment.valueOf(environment.name()),
+                    0L, true
+                ),
+                LifecycleCapability.MANAGED
+            );
+            return LoadResult.loaded(world, true);
+        }
+
+        @Override
+        public LoadResult load(final WorldStorageGateway.LoadClaim claim) { return LoadResult.failed(); }
+
+        @Override
+        public boolean unload(final LifecycleWorld world, final boolean save) {
+            loaded = false;
+            return true;
+        }
+
+        @Override
+        public boolean save(final LifecycleWorld world) { return true; }
+
+        @Override
+        public Optional<LifecycleWorld> findWorld(final VerifiedWorldRef expected) {
+            return loaded && world != null && world.reference().equals(expected)
+                ? Optional.of(world) : Optional.empty();
+        }
+
+        @Override
+        public Optional<LifecycleWorld> findLoadedWorldById(final String worldId) {
+            return loaded && world != null && world.name().equals(worldId)
+                ? Optional.of(world) : Optional.empty();
+        }
+
+        @Override
+        public Optional<LifecycleWorld> findWorldByPaperKey(final String paperKey) {
+            return loaded && world != null && world.identity().paperKey().equals(paperKey)
+                ? Optional.of(world) : Optional.empty();
+        }
+
+        @Override
+        public int playerCount(final LifecycleWorld world) { return 0; }
+
+        @Override
+        public CompletableFuture<Boolean> teleportPlayersToWorld(
+            final LifecycleWorld source, final LifecycleWorld target
+        ) { return CompletableFuture.completedFuture(false); }
+
+        @Override
+        public CompletableFuture<Void> beginShutdown() { return CompletableFuture.completedFuture(null); }
     }
 }

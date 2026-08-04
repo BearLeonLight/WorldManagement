@@ -1,6 +1,5 @@
 package io.github.bearl.worldmanagement.storage;
 
-import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 
@@ -20,7 +19,6 @@ import java.util.Map;
 import java.util.Optional;
 import java.util.Set;
 import java.util.UUID;
-import java.util.concurrent.CompletionException;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 
@@ -30,7 +28,7 @@ final class StorageMigrationServiceTest {
     Path temporaryDirectory;
 
     @Test
-    void rejectsInactiveSourceAndUnconfiguredTarget() {
+    void reportsMigrationPreconditionRejections() {
         final PluginIoExecutor executor = new PluginIoExecutor("MigrationTest");
         try {
             final StorageMigrationService service = new StorageMigrationService(
@@ -40,8 +38,37 @@ final class StorageMigrationServiceTest {
                 temporaryDirectory
             );
 
-            assertThrows(CompletionException.class, () -> service.migrate(StorageProvider.SQLITE, StorageProvider.YAML).join());
-            assertThrows(CompletionException.class, () -> service.migrate(StorageProvider.YAML, StorageProvider.SQLITE).join());
+            assertEquals(StorageMigrationService.MigrationStatus.SOURCE_NOT_ACTIVE,
+                service.migrate(StorageProvider.SQLITE, StorageProvider.YAML).join().status());
+            assertEquals(StorageMigrationService.MigrationStatus.SAME_PROVIDER,
+                service.migrate(StorageProvider.YAML, StorageProvider.YAML).join().status());
+            assertEquals(StorageMigrationService.MigrationStatus.TARGET_NOT_CONFIGURED,
+                service.migrate(StorageProvider.YAML, StorageProvider.SQLITE).join().status());
+        } finally {
+            executor.shutdown(Duration.ofSeconds(1));
+        }
+    }
+
+    @Test
+    void rejectsNonEmptyTargetWithoutFreezingMetadataMutations() {
+        final PluginIoExecutor executor = new PluginIoExecutor("MigrationTest");
+        try {
+            final MetadataMutationGate mutationGate = new MetadataMutationGate(executor);
+            final StorageConfiguration sqlite = sqliteConfiguration("non-empty-target.db");
+            try (WorldMetadataRepository target = StorageRepositoryFactory.create(sqlite, temporaryDirectory)) {
+                target.create(completeMetadata());
+            }
+            final StorageMigrationService service = new StorageMigrationService(
+                executor,
+                StorageConfiguration.defaults(),
+                Map.of(StorageProvider.SQLITE, sqlite),
+                temporaryDirectory,
+                mutationGate
+            );
+
+            assertEquals(StorageMigrationService.MigrationStatus.TARGET_NOT_EMPTY,
+                service.migrate(StorageProvider.YAML, StorageProvider.SQLITE).join().status());
+            assertEquals("still-open", mutationGate.submitMutation(() -> "still-open").join());
         } finally {
             executor.shutdown(Duration.ofSeconds(1));
         }
@@ -66,7 +93,8 @@ final class StorageMigrationServiceTest {
                 mutationGate
             );
 
-            service.migrate(StorageProvider.YAML, StorageProvider.SQLITE).join();
+            assertEquals(StorageMigrationService.MigrationStatus.MIGRATED,
+                service.migrate(StorageProvider.YAML, StorageProvider.SQLITE).join().status());
 
             assertTrue(mutationGate.submitMutation(() -> null).isCompletedExceptionally());
         } finally {
@@ -120,7 +148,10 @@ final class StorageMigrationServiceTest {
                 Map.of(targetProvider, target),
                 temporaryDirectory
             );
-            assertEquals(1, service.migrate(sourceProvider, targetProvider).join().migratedWorlds());
+            final StorageMigrationService.MigrationOutcome outcome =
+                service.migrate(sourceProvider, targetProvider).join();
+            assertEquals(StorageMigrationService.MigrationStatus.MIGRATED, outcome.status());
+            assertEquals(1, outcome.migratedWorlds());
         } finally {
             executor.shutdown(Duration.ofSeconds(1));
         }

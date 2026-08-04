@@ -25,9 +25,11 @@ final class LoadedWorldCatalogTest {
 
         catalog.replaceAll(List.of(minecraft));
         assertEquals(minecraft, catalog.findUniqueByWorldId("creative").orElseThrow());
+        assertEquals(minecraft, catalog.findExactUnique(minecraft.reference()).orElseThrow());
 
         catalog.loaded(external);
         assertTrue(catalog.findUniqueByWorldId("creative").isEmpty());
+        assertTrue(catalog.findExactUnique(minecraft.reference()).isEmpty());
     }
 
     @Test
@@ -47,6 +49,35 @@ final class LoadedWorldCatalogTest {
         assertFalse(catalog.isCurrent(originalLoad));
         assertTrue(catalog.isCurrent(staleUnload));
         assertEquals(replacement, catalog.findUniqueByWorldId("creative").orElseThrow());
+    }
+
+    @Test
+    void retiredUnloadsDoNotRetainHistoricalWorldIdsOrAllowGenerationReuse() {
+        final LoadedWorldCatalog catalog = new LoadedWorldCatalog();
+        LoadedWorldCatalog.Observation firstUnload = null;
+
+        for (int index = 0; index < 100; index++) {
+            final WorldRuntimeGateway.LifecycleWorld loaded = world(
+                "minecraft:temporary_" + index,
+                new UUID(0L, index + 1L).toString()
+            );
+            catalog.loaded(loaded);
+            final LoadedWorldCatalog.Observation unloaded = catalog.unloaded(loaded.reference());
+            if (firstUnload == null) {
+                firstUnload = unloaded;
+            }
+            assertTrue(catalog.isCurrent(unloaded));
+            catalog.retire(unloaded);
+            assertFalse(catalog.isCurrent(unloaded));
+        }
+
+        final WorldRuntimeGateway.LifecycleWorld reloaded = world(
+            "minecraft:temporary_0", "11111111-1111-1111-1111-111111111111"
+        );
+        catalog.loaded(reloaded);
+
+        assertFalse(catalog.isCurrent(firstUnload));
+        assertEquals(1, catalog.retainedObservationCount());
     }
 
     private static WorldRuntimeGateway.LifecycleWorld world(final String paperKey, final String uuid) {

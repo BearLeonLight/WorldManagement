@@ -15,7 +15,7 @@ public final class StorageMigrator {
         final Collection<WorldMetadata> sourceMetadata = source.loadAll();
         validate(sourceMetadata);
         if (!target.loadAll().isEmpty()) {
-            throw new StorageException("Migration target must be empty.");
+            throw new TargetNotEmptyException();
         }
         try {
             for (final WorldMetadata metadata : sourceMetadata) {
@@ -63,5 +63,11 @@ public final class StorageMigrator {
     }
 
     public record MigrationResult(int migratedWorlds) {
+    }
+
+    static final class TargetNotEmptyException extends StorageException {
+        private TargetNotEmptyException() {
+            super("Migration target must be empty.");
+        }
     }
 }

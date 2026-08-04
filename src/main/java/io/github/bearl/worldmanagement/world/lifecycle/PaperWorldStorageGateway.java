@@ -59,6 +59,44 @@ public final class PaperWorldStorageGateway implements WorldStorageGateway {
     }
 
     @Override
+    public Optional<ImportClaim> prepareImport(final String worldId) {
+        final Path current = dimensionDirectory(worldId);
+        final Path legacy = legacyDirectory(worldId);
+        final boolean currentExists = Files.exists(current, LinkOption.NOFOLLOW_LINKS);
+        final boolean legacyExists = Files.exists(legacy, LinkOption.NOFOLLOW_LINKS);
+        if (!currentExists && !legacyExists) {
+            return Optional.empty();
+        }
+        if (currentExists && legacyExists) {
+            throw new StorageException("World has ambiguous storage paths: " + worldId);
+        }
+        final Path locator = currentExists
+            ? nameValidator.requireExistingDirectChild(current.getParent(), worldId)
+            : nameValidator.requireImportableWorld(legacy.getParent(), worldId);
+        final StorageFingerprint fingerprint = currentExists
+            ? paperStorageFingerprint(locator)
+            : legacyStorageFingerprint(locator);
+        return Optional.of(new PaperImportClaim(gatewayId, worldId, locator, fingerprint));
+    }
+
+    @Override
+    public void validateImportClaim(final ImportClaim importClaim) {
+        final PaperImportClaim claim = requireImportClaim(importClaim);
+        final Path current = claim.fingerprint().paperLayout()
+            ? dimensionDirectory(claim.worldId())
+            : legacyDirectory(claim.worldId());
+        if (!claim.locator().equals(current)) {
+            throw new StorageException("Import claim locator no longer matches the world ID.");
+        }
+        final StorageFingerprint observed = claim.fingerprint().paperLayout()
+            ? paperStorageFingerprint(current)
+            : legacyStorageFingerprint(current);
+        if (!claim.fingerprint().equals(observed)) {
+            throw new StorageException("World storage changed after the import claim was created.");
+        }
+    }
+
+    @Override
     public Optional<LoadClaim> prepareLoad(final WorldMetadata metadata) {
         final WorldMetadata requiredMetadata = Objects.requireNonNull(metadata, "metadata");
         if (requiredMetadata.lifecycleCapability() != LifecycleCapability.MANAGED) {
@@ -112,28 +150,50 @@ public final class PaperWorldStorageGateway implements WorldStorageGateway {
     public Optional<CreationClaim> prepareCreation(final String worldId) {
         final Path dimension = dimensionDirectory(worldId);
         final Path legacy = legacyDirectory(worldId);
-        if (Files.exists(dimension) || Files.exists(legacy)) {
+        if (Files.exists(dimension, LinkOption.NOFOLLOW_LINKS)
+            || Files.exists(legacy, LinkOption.NOFOLLOW_LINKS)) {
             return Optional.empty();
         }
         return Optional.of(new PaperCreationClaim(gatewayId, worldId, dimension, legacy));
     }
 
     @Override
-    public void deleteCreated(final CreationClaim creationClaim) {
+    public OwnedCreationClaim bindCreated(
+        final CreationClaim creationClaim,
+        final VerifiedWorldRef world
+    ) {
         final PaperCreationClaim claim = requireCreationClaim(creationClaim);
-        final boolean dimensionExists = Files.exists(claim.dimension());
-        final boolean legacyExists = Files.exists(claim.legacy());
-        if (dimensionExists && legacyExists) {
-            throw new StorageException("Created world has ambiguous storage paths: " + claim.worldId());
+        final VerifiedWorldRef requiredWorld = Objects.requireNonNull(world, "world");
+        if (!claim.worldId().equals(requiredWorld.worldId())
+            || !requiredWorld.paperKey().equals("minecraft:" + claim.worldId())) {
+            throw new StorageException("Created runtime identity does not match its storage claim.");
         }
-        if (!dimensionExists && !legacyExists) {
-            return;
+        final boolean dimensionExists = Files.exists(claim.dimension(), LinkOption.NOFOLLOW_LINKS);
+        final boolean legacyExists = Files.exists(claim.legacy(), LinkOption.NOFOLLOW_LINKS);
+        if (dimensionExists == legacyExists) {
+            throw new StorageException("Created world has ambiguous or missing storage paths: " + claim.worldId());
         }
-        final Path created = dimensionExists ? claim.dimension() : claim.legacy();
-        if (!Files.isDirectory(created)) {
-            throw new StorageException("Created world storage is not a directory: " + claim.worldId());
+        final Path locator = dimensionExists
+            ? nameValidator.requireExistingDirectChild(claim.dimension().getParent(), claim.worldId())
+            : nameValidator.requireImportableWorld(claim.legacy().getParent(), claim.worldId());
+        return new PaperOwnedCreationClaim(
+            gatewayId, requiredWorld, locator, rootIdentity(locator), dimensionExists
+        );
+    }
+
+    @Override
+    public void deleteCreated(final OwnedCreationClaim creationClaim) {
+        final PaperOwnedCreationClaim claim = requireOwnedCreationClaim(creationClaim);
+        final Path alternate = claim.paperLayout()
+            ? legacyDirectory(claim.world().worldId())
+            : dimensionDirectory(claim.world().worldId());
+        if (Files.exists(alternate, LinkOption.NOFOLLOW_LINKS)) {
+            throw new StorageException("Created world has ambiguous storage paths: " + claim.world().worldId());
         }
-        directoryRemover.deleteDirectChild(created.getParent(), claim.worldId());
+        if (!claim.rootIdentity().equals(rootIdentity(claim.locator()))) {
+            throw new StorageException("Created world storage changed after ownership was bound.");
+        }
+        directoryRemover.deleteDirectChild(claim.locator().getParent(), claim.world().worldId());
     }
 
     @Override
@@ -239,6 +299,9 @@ public final class PaperWorldStorageGateway implements WorldStorageGateway {
                 if (current.version() != deletingVersion) {
                     throw new StorageException("Deleting metadata version does not match its quarantine claim.");
                 }
+                if (!current.deletionTransactionId().equals(Optional.of(claim.transactionId()))) {
+                    throw new StorageException("Deleting metadata transaction does not match its quarantine claim.");
+                }
                 disposition = RecoveryDisposition.DELETE;
             } else {
                 if (current.version() != claim.metadataVersion()) {
@@ -294,6 +357,20 @@ public final class PaperWorldStorageGateway implements WorldStorageGateway {
         return claim;
     }
 
+    private PaperOwnedCreationClaim requireOwnedCreationClaim(final OwnedCreationClaim creationClaim) {
+        if (!(creationClaim instanceof PaperOwnedCreationClaim claim) || !gatewayId.equals(claim.gatewayId())) {
+            throw new IllegalArgumentException("Owned creation claim does not belong to this storage gateway.");
+        }
+        return claim;
+    }
+
+    private PaperImportClaim requireImportClaim(final ImportClaim importClaim) {
+        if (!(importClaim instanceof PaperImportClaim claim) || !gatewayId.equals(claim.gatewayId())) {
+            throw new IllegalArgumentException("Import claim does not belong to this storage gateway.");
+        }
+        return claim;
+    }
+
     private PaperLoadClaim requireLoadClaim(final LoadClaim loadClaim) {
         if (!(loadClaim instanceof PaperLoadClaim claim) || !gatewayId.equals(claim.gatewayId())) {
             throw new IllegalArgumentException("Load claim does not belong to this storage gateway.");
@@ -311,6 +388,24 @@ public final class PaperWorldStorageGateway implements WorldStorageGateway {
 
     private StorageFingerprint legacyStorageFingerprint(final Path locator) {
         return storageFingerprint(locator, false, List.of(locator.resolve("level.dat")));
+    }
+
+    private static StorageRootIdentity rootIdentity(final Path locator) {
+        try {
+            final BasicFileAttributes attributes = Files.readAttributes(
+                locator, BasicFileAttributes.class, LinkOption.NOFOLLOW_LINKS
+            );
+            if (!attributes.isDirectory() || attributes.isSymbolicLink() || attributes.isOther()) {
+                throw new StorageException("Created world storage locator must be a regular directory.");
+            }
+            return new StorageRootIdentity(
+                locator.toRealPath(),
+                attributes.fileKey() == null ? Optional.empty() : Optional.of(attributes.fileKey().toString()),
+                attributes.creationTime()
+            );
+        } catch (final IOException exception) {
+            throw new StorageException("Could not validate created world storage ownership.", exception);
+        }
     }
 
     private static StorageFingerprint storageFingerprint(
@@ -581,6 +676,23 @@ public final class PaperWorldStorageGateway implements WorldStorageGateway {
     ) implements CreationClaim {
     }
 
+    private record PaperOwnedCreationClaim(
+        UUID gatewayId,
+        VerifiedWorldRef world,
+        Path locator,
+        StorageRootIdentity rootIdentity,
+        boolean paperLayout
+    ) implements OwnedCreationClaim {
+    }
+
+    private record PaperImportClaim(
+        UUID gatewayId,
+        String worldId,
+        Path locator,
+        StorageFingerprint fingerprint
+    ) implements ImportClaim {
+    }
+
     private record PaperLoadClaim(
         UUID gatewayId,
         VerifiedWorldRef world,
@@ -595,6 +707,13 @@ public final class PaperWorldStorageGateway implements WorldStorageGateway {
         EntryFingerprint root,
         java.util.Map<Path, EntryFingerprint> markers,
         boolean paperLayout
+    ) {
+    }
+
+    private record StorageRootIdentity(
+        Path realLocator,
+        Optional<String> fileKey,
+        java.nio.file.attribute.FileTime creationTime
     ) {
     }
 

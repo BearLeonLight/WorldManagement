@@ -7,6 +7,7 @@ import io.github.bearl.worldmanagement.world.WorldManagementService;
 import io.github.bearl.worldmanagement.world.WorldMetadata;
 import io.github.bearl.worldmanagement.world.WorldWarp;
 import io.github.bearl.worldmanagement.world.IdentityVerificationState;
+import io.github.bearl.worldmanagement.world.lifecycle.LoadedWorldCatalog;
 import io.papermc.paper.command.brigadier.CommandSourceStack;
 import java.util.Collection;
 import java.util.List;
@@ -18,6 +19,7 @@ import java.util.function.BiFunction;
 public final class SuggestionCatalog {
 
     public static final SuggestionKey<String> MANAGED_WORLD = new SuggestionKey<>("managed-world", String.class);
+    public static final SuggestionKey<String> LIFECYCLE_WORLD = new SuggestionKey<>("lifecycle-world", String.class);
     public static final SuggestionKey<String> DETACHED_WORLD = new SuggestionKey<>("detached-world", String.class);
     public static final SuggestionKey<String> MANAGEABLE_WORLD = new SuggestionKey<>("manageable-world", String.class);
     public static final SuggestionKey<String> VISIBLE_WARP = new SuggestionKey<>("visible-warp", String.class);
@@ -30,26 +32,43 @@ public final class SuggestionCatalog {
     public static final SuggestionKey<String> CONFLICT_WORLD = new SuggestionKey<>("conflict-world", String.class);
     public static final SuggestionKey<String> NON_VERIFIED_WORLD = new SuggestionKey<>("non-verified-world", String.class);
     public static final SuggestionKey<String> GENERATOR_PLUGIN = new SuggestionKey<>("generator-plugin", String.class);
+    public static final SuggestionKey<String> LIFECYCLE_TARGET = new SuggestionKey<>("lifecycle-target", String.class);
+    public static final SuggestionKey<String> FALLBACK_TARGET = new SuggestionKey<>("fallback-target", String.class);
+    public static final SuggestionKey<String> DISPLAY_NAME_WORLD = new SuggestionKey<>("display-name-world", String.class);
 
     private final AtomicReference<WorldManagementService> service = new AtomicReference<>();
     private final AtomicReference<List<String>> generatorPlugins = new AtomicReference<>(List.of());
     private final OnlinePlayerSnapshot players;
     private final CommandAuthorizationSnapshot authorizations;
+    private final AtomicReference<LoadedWorldCatalog> loadedWorlds;
 
     public SuggestionCatalog(final OnlinePlayerSnapshot players) {
-        this(players, new CommandAuthorizationSnapshot());
+        this(players, new CommandAuthorizationSnapshot(), new LoadedWorldCatalog());
     }
 
     public SuggestionCatalog(
         final OnlinePlayerSnapshot players,
         final CommandAuthorizationSnapshot authorizations
     ) {
+        this(players, authorizations, new LoadedWorldCatalog());
+    }
+
+    public SuggestionCatalog(
+        final OnlinePlayerSnapshot players,
+        final CommandAuthorizationSnapshot authorizations,
+        final LoadedWorldCatalog loadedWorlds
+    ) {
         this.players = Objects.requireNonNull(players, "players");
         this.authorizations = Objects.requireNonNull(authorizations, "authorizations");
+        this.loadedWorlds = new AtomicReference<>(Objects.requireNonNull(loadedWorlds, "loadedWorlds"));
     }
 
     public void initialize(final WorldManagementService worldManagementService) {
         service.set(Objects.requireNonNull(worldManagementService, "worldManagementService"));
+    }
+
+    public void useLoadedWorldCatalog(final LoadedWorldCatalog catalog) {
+        loadedWorlds.set(Objects.requireNonNull(catalog, "catalog"));
     }
 
     public SuggestionProvider<CommandSourceStack> provider(
@@ -64,6 +83,30 @@ public final class SuggestionCatalog {
     public Collection<String> managedWorlds() {
         final WorldManagementService current = service.get();
         return current == null ? List.of() : current.managedWorlds().stream().map(WorldMetadata::worldName).sorted().toList();
+    }
+
+    public Collection<String> lifecycleWorlds() {
+        final WorldManagementService current = service.get();
+        if (current == null) {
+            return List.of();
+        }
+        return java.util.stream.Stream.concat(
+            current.managedWorlds().stream(), current.detachedWorlds().stream()
+        ).map(WorldMetadata::worldName).sorted().toList();
+    }
+
+    public Collection<String> lifecycleTargets() {
+        return java.util.stream.Stream.concat(
+            lifecycleWorlds().stream(), loadedWorlds.get().uniqueWorldIds().stream()
+        ).distinct().sorted().toList();
+    }
+
+    public Collection<String> fallbackTargets() {
+        return loadedWorlds.get().uniqueWorldIds();
+    }
+
+    public Collection<String> displayNameWorlds() {
+        return lifecycleWorlds();
     }
 
     public Collection<String> detachedWorlds() {

@@ -7,6 +7,8 @@ public enum WorldOperationState {
     LOADING,
     UNLOADING,
     REMOVING,
+    MANAGING,
+    PURGING,
     IMPORTING,
     DELETING
 }

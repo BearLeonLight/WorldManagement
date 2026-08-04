@@ -66,6 +66,22 @@ final class JdbcWorldMetadataRepositoryTest {
     }
 
     @Test
+    void persistsDeletingTransactionInSharedPayload() {
+        final String url = sqliteUrl("deleting-transaction.db");
+        final java.util.UUID transactionId = java.util.UUID.fromString(
+            "77777777-7777-7777-7777-777777777777"
+        );
+        try (JdbcWorldMetadataRepository repository = repository(url)) {
+            final WorldMetadata deleting = WorldMetadata.createDefault("creative", true)
+                .withDeleting(transactionId);
+
+            repository.create(deleting);
+
+            assertEquals(deleting, repository.find("creative").orElseThrow());
+        }
+    }
+
+    @Test
     void rollsBackAuditAndMetadataWorkInOneTransaction() throws Exception {
         final String url = "jdbc:sqlite:" + temporaryDirectory.resolve("transaction.db").toAbsolutePath();
         try (JdbcWorldMetadataRepository repository = new JdbcWorldMetadataRepository(url, null, null, new YamlWorldMetadataCodec())) {
@@ -89,7 +105,7 @@ final class JdbcWorldMetadataRepositoryTest {
         final String url = sqliteUrl("future-payload.db");
         final YamlWorldMetadataCodec codec = new YamlWorldMetadataCodec();
         try (JdbcWorldMetadataRepository repository = new JdbcWorldMetadataRepository(url, null, null, codec)) {
-            final String futurePayload = "schema-version: 3\nworld-id: creative\n";
+            final String futurePayload = "schema-version: 5\nworld-id: creative\n";
             repository.inTransaction(connection -> {
                 try (PreparedStatement statement = connection.prepareStatement(
                     "INSERT INTO worldmanagement_metadata (world_name, version, payload) VALUES (?, ?, ?)")) {

@@ -41,6 +41,7 @@ import io.github.bearl.worldmanagement.world.lifecycle.PaperWorldStorageGateway;
 import io.github.bearl.worldmanagement.world.lifecycle.WorldLifecycleReconciler;
 import io.github.bearl.worldmanagement.world.lifecycle.WorldIdentityAutoSynchronizer;
 import io.github.bearl.worldmanagement.world.lifecycle.WorldLifecycleListener;
+import io.github.bearl.worldmanagement.world.lifecycle.WorldIsolationListener;
 import io.github.bearl.worldmanagement.world.lifecycle.WorldGeneratorCatalog;
 import io.github.bearl.worldmanagement.world.PaperWorldTeleportGateway;
 import io.github.bearl.worldmanagement.world.lifecycle.WorldDirectoryRemover;
@@ -117,6 +118,7 @@ public final class WorldManagementPlugin extends JavaPlugin {
         this.ioExecutor = new PluginIoExecutor(getName());
         final WorldThreadDispatcher threadDispatcher = new PaperWorldThreadDispatcher(this);
         this.paperCommand = commandComposition.command();
+        commandComposition.suggestions().useLoadedWorldCatalog(loadedWorldCatalog);
         this.messageSender = new CommandMessageSender(threadDispatcher, consoleOutput);
         this.paperCommand.initializeLoadingResponder(sender -> messageSender.send(
             sender,
@@ -348,8 +350,7 @@ public final class WorldManagementPlugin extends JavaPlugin {
         try {
             fallback = new LifecycleFallbackValidator().resolveUsable(
                 configuration.fallbackWorld(),
-                worldManagementService::managedWorld,
-                runtimeGateway::findWorld
+                runtimeGateway::findLoadedWorldById
             );
         } catch (final IllegalArgumentException exception) {
             getLogger().log(Level.SEVERE, "Lifecycle fallback validation failed.", exception);
@@ -409,33 +410,31 @@ public final class WorldManagementPlugin extends JavaPlugin {
         this.identityAutoSynchronizer = new WorldIdentityAutoSynchronizer(
             worldManagementService, loadedWorldCatalog, threadDispatcher
         );
-        if (moduleManager.enabled(io.github.bearl.worldmanagement.module.ModuleId.PROTECTION)) {
-            this.playerIsolationService = new PlayerIsolationService(
-                worldManagementService,
-                loadedWorldCatalog,
-                fallback,
-                worldTeleportGateway,
-                teleportBypassTokens,
-                getLogger()::warning
-            );
-            for (final org.bukkit.World loadedWorld : getServer().getWorlds()) {
-                final PaperWorldIdentity identity = PaperWorldIdentity.capture(loadedWorld);
-                worldManagementService.managedWorld(identity.snapshot().keyValue())
-                    .filter(metadata -> metadata.identityState()
-                        != io.github.bearl.worldmanagement.world.IdentityVerificationState.VERIFIED)
-                    .flatMap(metadata -> loadedWorldCatalog.findUniqueByWorldId(metadata.worldName()))
-                    .filter(observed -> observed.identity().equals(identity.snapshot()))
-                    .ifPresent(observed -> playerIsolationService.relocatePlayersInWorld(
-                        loadedWorld, observed, threadDispatcher
-                    ));
+        this.playerIsolationService = new PlayerIsolationService(
+            worldManagementService,
+            loadedWorldCatalog,
+            fallback,
+            worldTeleportGateway,
+            teleportBypassTokens,
+            getLogger()::warning
+        );
+        for (final org.bukkit.World loadedWorld : getServer().getWorlds()) {
+            final PaperWorldIdentity identity = PaperWorldIdentity.capture(loadedWorld);
+            if (worldManagementService.resolveRuntimeWorld(
+                identity.snapshot(), identity.lifecycleCapability()
+            ).status() != io.github.bearl.worldmanagement.world.WorldRuntimeResolution.Status.ISOLATED) {
+                continue;
             }
+            loadedWorldCatalog.findUniqueByWorldId(identity.snapshot().keyValue())
+                .filter(observed -> observed.identity().equals(identity.snapshot()))
+                .ifPresent(observed -> playerIsolationService.relocatePlayersInWorld(
+                    loadedWorld, observed, threadDispatcher
+                ));
         }
         final java.util.function.BiConsumer<org.bukkit.World, io.github.bearl.worldmanagement.world.lifecycle.WorldRuntimeGateway.LifecycleWorld>
-            isolateExistingPlayers = playerIsolationService == null
-                ? (world, observed) -> { }
-                : (world, observed) -> playerIsolationService.relocatePlayersInWorld(
-                    world, observed, threadDispatcher
-                );
+            isolateExistingPlayers = (world, observed) -> playerIsolationService.forceRelocatePlayersInWorld(
+                world, observed, threadDispatcher
+            );
         getServer().getPluginManager().registerEvents(
             new WorldLifecycleListener(
                 worldManagementService,
@@ -446,6 +445,10 @@ public final class WorldManagementPlugin extends JavaPlugin {
                 threadDispatcher,
                 loadedWorldCatalog
             ),
+            this
+        );
+        getServer().getPluginManager().registerEvents(
+            new WorldIsolationListener(worldManagementService, playerIsolationService),
             this
         );
         lifecycleReconciler.reconcileStartup()
@@ -473,8 +476,7 @@ public final class WorldManagementPlugin extends JavaPlugin {
                     worldManagementService,
                     new WorldAccessPolicy(),
                     diagnostics,
-                    teleportBypassTokens,
-                    playerIsolationService
+                    teleportBypassTokens
                 ),
                 this
             );
@@ -482,6 +484,7 @@ public final class WorldManagementPlugin extends JavaPlugin {
         } else {
             consoleOutput.info(startupDiagnostics.detailComponent("Protection listener disabled with protection module"));
         }
+        consoleOutput.info(startupDiagnostics.detailComponent("Lifecycle isolation listener registered"));
         consoleOutput.info(startupDiagnostics.successComponent(startupDiagnostics.stageCompleted(
             "Services ready",
             servicesStartedAt,

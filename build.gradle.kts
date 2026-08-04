@@ -3,6 +3,7 @@ import java.net.URI
 import java.nio.file.Files
 import java.nio.file.StandardCopyOption
 import java.security.MessageDigest
+import java.time.Duration
 import java.util.concurrent.TimeUnit
 import groovy.json.JsonSlurper
 
@@ -15,6 +16,9 @@ group = providers.gradleProperty("group").get()
 version = providers.gradleProperty("version").get()
 
 data class PaperDownload(val name: String, val url: String, val sha256: String)
+
+val downloadConnectTimeoutMillis = 15_000
+val downloadReadTimeoutMillis = 60_000
 
 fun sha256(file: File): String {
     val digest = MessageDigest.getInstance("SHA-256")
@@ -32,7 +36,11 @@ fun sha256(file: File): String {
 fun downloadPaperServer(version: String, channel: String): File {
     val userAgent = "WorldManagement-Gradle/${project.version} (https://github.com/BearL)"
     val buildsUrl = URI("https://fill.papermc.io/v3/projects/paper/versions/$version/builds").toURL()
-    val connection = buildsUrl.openConnection().apply { setRequestProperty("User-Agent", userAgent) }
+    val connection = buildsUrl.openConnection().apply {
+        connectTimeout = downloadConnectTimeoutMillis
+        readTimeout = downloadReadTimeoutMillis
+        setRequestProperty("User-Agent", userAgent)
+    }
     val builds = connection.getInputStream().bufferedReader(Charsets.UTF_8).use { reader ->
         @Suppress("UNCHECKED_CAST")
         JsonSlurper().parse(reader) as List<Map<String, Any?>>
@@ -61,7 +69,11 @@ fun downloadPaperServer(version: String, channel: String): File {
     cacheDirectory.mkdirs()
     val temporaryJar = File(cacheDirectory, artifact.name + ".part")
     logger.lifecycle("Downloading Paper ${build["id"]} ($channel) from ${artifact.url}")
-    val artifactConnection = URI(artifact.url).toURL().openConnection().apply { setRequestProperty("User-Agent", userAgent) }
+    val artifactConnection = URI(artifact.url).toURL().openConnection().apply {
+        connectTimeout = downloadConnectTimeoutMillis
+        readTimeout = downloadReadTimeoutMillis
+        setRequestProperty("User-Agent", userAgent)
+    }
     artifactConnection.getInputStream().use { input -> temporaryJar.outputStream().use(input::copyTo) }
     val actualChecksum = sha256(temporaryJar)
     if (!actualChecksum.equals(artifact.sha256, ignoreCase = true)) {
@@ -108,6 +120,28 @@ fun resolvePaperServerJar(): File {
     }
     val channel = providers.gradleProperty("paperDownloadChannel").getOrElse(defaultChannel).uppercase()
     return downloadPaperServer(minecraftVersion, channel)
+}
+
+fun org.gradle.api.tasks.Exec.configureLuckPermsEnvironment() {
+    project.providers.gradleProperty("luckPermsPluginJar").orNull?.let { configured ->
+        val jar = project.file(configured)
+        if (!jar.isFile) {
+            throw GradleException("LuckPerms plugin JAR does not exist: ${jar.absolutePath}")
+        }
+        environment("WM_LUCKPERMS_PLUGIN_JAR", jar.absolutePath)
+    } ?: project.rootDir.parentFile.resolve("LuckPerms/bukkit/loader/build/libs")
+        .listFiles { candidate ->
+            candidate.isFile && candidate.name.matches(Regex("LuckPerms-Bukkit-.+\\.jar", RegexOption.IGNORE_CASE))
+        }
+        ?.maxByOrNull(File::lastModified)
+        ?.let { environment("WM_LUCKPERMS_PLUGIN_JAR", it.absolutePath) }
+    environment("WM_LUCKPERMS_CACHE_DIR", File(project.gradle.gradleUserHomeDir, "caches/worldmanagement/luckperms").absolutePath)
+    environment("WM_LUCKPERMS_FILE_NAME", "LuckPerms-Bukkit-5.5.53.jar")
+    environment("WM_LUCKPERMS_URL", "https://cdn.modrinth.com/data/Vebnzrzj/versions/MBSY8toc/LuckPerms-Bukkit-5.5.53.jar")
+    environment(
+        "WM_LUCKPERMS_SHA512",
+        "a0e087adfc1c7b9fab8fdb5a430a3331a2ca30bfc72818bb7e65ce9baff051a1490834be8cbb9cbeda292f2e92c44cf03fb829ebeb233ade9d666ed908e49ad5"
+    )
 }
 
 repositories {
@@ -208,6 +242,9 @@ tasks {
 
     test {
         useJUnitPlatform()
+        systemProperty("junit.jupiter.execution.timeout.default", "10 s")
+        systemProperty("junit.jupiter.execution.timeout.thread.mode.default", "SEPARATE_THREAD")
+        timeout.set(Duration.ofMinutes(3))
     }
 
     val e2eSupportJar = register<Jar>("e2eSupportJar") {
@@ -273,6 +310,7 @@ tasks {
         group = "verification"
         description = "Starts an isolated Paper server with the shaded plugin JAR and verifies WorldManagement loads its metadata."
         dependsOn(shadowJar)
+        timeout.set(Duration.ofMinutes(3))
 
         doLast {
             val serverJar = resolvePaperServerJar()
@@ -334,60 +372,62 @@ tasks {
                 .redirectOutput(logFile)
                 .start()
 
-            val deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(90)
-            var pluginReady = false
-            while (process.isAlive && System.nanoTime() < deadline) {
-                if (logFile.isFile && logFile.readText().replace(Regex("\\u001B\\[[\\d;]*[^\\d;]"), "")
-                    .contains("[WorldManagement] Enabled WorldManagement")) {
-                    pluginReady = true
-                    break
+            try {
+                val deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(90)
+                var pluginReady = false
+                while (process.isAlive && System.nanoTime() < deadline) {
+                    if (logFile.isFile && logFile.readText().replace(Regex("\\u001B\\[[\\d;]*[^\\d;]"), "")
+                        .contains("[WorldManagement] Enabled WorldManagement")) {
+                        pluginReady = true
+                        break
+                    }
+                    Thread.sleep(250)
                 }
-                Thread.sleep(250)
-            }
-            if (!pluginReady) {
-                process.destroyForcibly()
-                process.waitFor(10, TimeUnit.SECONDS)
-                throw GradleException("Paper JAR smoke test did not fully enable WorldManagement. See ${logFile.absolutePath}")
-            }
-
-            val output = process.outputStream.bufferedWriter()
-            output.write("wm list\n")
-            output.flush()
-            val commandDeadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(10)
-            var commandHandled = false
-            while (process.isAlive && System.nanoTime() < commandDeadline) {
-                if (logFile.readText().contains("目前沒有受 WorldManagement 管理的世界。")) {
-                    commandHandled = true
-                    break
+                if (!pluginReady) {
+                    throw GradleException("Paper JAR smoke test did not fully enable WorldManagement. See ${logFile.absolutePath}")
                 }
-                Thread.sleep(100)
-            }
-            if (!commandHandled) {
-                output.close()
-                process.destroyForcibly()
-                process.waitFor(10, TimeUnit.SECONDS)
-                throw GradleException("Paper JAR smoke test could not execute wm list. See ${logFile.absolutePath}")
-            }
 
-            output.use {
-                output.write("stop\n")
+                val output = process.outputStream.bufferedWriter()
+                output.write("wm list\n")
                 output.flush()
-            }
-            if (!process.waitFor(30, TimeUnit.SECONDS)) {
-                process.destroyForcibly()
-                throw GradleException("Paper JAR smoke test server did not stop. See ${logFile.absolutePath}")
-            }
-            if (process.exitValue() != 0) {
-                throw GradleException("Paper JAR smoke test exited with ${process.exitValue()}. See ${logFile.absolutePath}")
-            }
-            val shutdownLog = logFile.readText()
-            if (!shutdownLog.contains("WorldManagement terminal shutdown complete.")) {
-                throw GradleException("Paper JAR smoke test exited before WorldManagement terminal shutdown completed. See ${logFile.absolutePath}")
-            }
-            val shutdownFailure = listOf("zip file error", "I/O shutdown failed", "did not drain")
-                .firstOrNull(shutdownLog::contains)
-            if (shutdownFailure != null) {
-                throw GradleException("Paper JAR smoke test reported shutdown failure '$shutdownFailure'. See ${logFile.absolutePath}")
+                val commandDeadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(10)
+                var commandHandled = false
+                while (process.isAlive && System.nanoTime() < commandDeadline) {
+                    if (logFile.readText().contains("目前沒有受 WorldManagement 管理的世界。")) {
+                        commandHandled = true
+                        break
+                    }
+                    Thread.sleep(100)
+                }
+                if (!commandHandled) {
+                    output.close()
+                    throw GradleException("Paper JAR smoke test could not execute wm list. See ${logFile.absolutePath}")
+                }
+
+                output.use {
+                    output.write("stop\n")
+                    output.flush()
+                }
+                if (!process.waitFor(30, TimeUnit.SECONDS)) {
+                    throw GradleException("Paper JAR smoke test server did not stop. See ${logFile.absolutePath}")
+                }
+                if (process.exitValue() != 0) {
+                    throw GradleException("Paper JAR smoke test exited with ${process.exitValue()}. See ${logFile.absolutePath}")
+                }
+                val shutdownLog = logFile.readText()
+                if (!shutdownLog.contains("WorldManagement terminal shutdown complete.")) {
+                    throw GradleException("Paper JAR smoke test exited before WorldManagement terminal shutdown completed. See ${logFile.absolutePath}")
+                }
+                val shutdownFailure = listOf("zip file error", "I/O shutdown failed", "did not drain")
+                    .firstOrNull(shutdownLog::contains)
+                if (shutdownFailure != null) {
+                    throw GradleException("Paper JAR smoke test reported shutdown failure '$shutdownFailure'. See ${logFile.absolutePath}")
+                }
+            } finally {
+                if (process.isAlive) {
+                    process.destroyForcibly()
+                    process.waitFor(10, TimeUnit.SECONDS)
+                }
             }
         }
     }
@@ -397,7 +437,11 @@ tasks {
         description = "Installs the optional Mineflayer player E2E dependencies."
         workingDir(layout.projectDirectory.dir("e2e/player"))
         val npmExecutable = if (System.getProperty("os.name").startsWith("Windows", ignoreCase = true)) "npm.cmd" else "npm"
-        commandLine(npmExecutable, "ci", "--ignore-scripts", "--no-audit", "--no-fund")
+        commandLine(
+            npmExecutable, "ci", "--ignore-scripts", "--no-audit", "--no-fund",
+            "--fetch-timeout=60000", "--fetch-retries=1"
+        )
+        timeout.set(Duration.ofMinutes(3))
     }
 
     register<Exec>("installConsoleE2eDependencies") {
@@ -405,7 +449,11 @@ tasks {
         description = "Installs the isolated console E2E dependencies."
         workingDir(layout.projectDirectory.dir("e2e/console"))
         val npmExecutable = if (System.getProperty("os.name").startsWith("Windows", ignoreCase = true)) "npm.cmd" else "npm"
-        commandLine(npmExecutable, "ci", "--ignore-scripts", "--no-audit", "--no-fund")
+        commandLine(
+            npmExecutable, "ci", "--ignore-scripts", "--no-audit", "--no-fund",
+            "--fetch-timeout=60000", "--fetch-retries=1"
+        )
+        timeout.set(Duration.ofMinutes(3))
     }
 
     register<Exec>("playerE2eStrategyTest") {
@@ -416,8 +464,10 @@ tasks {
         commandLine(
             "node", "--test",
             "e2e/player/test/command-tree.test.cjs",
+            "e2e/player/test/output-monitor.test.cjs",
             "e2e/player/test/protocol-strategy.test.cjs"
         )
+        timeout.set(Duration.ofMinutes(1))
     }
 
     register<Exec>("commandRuntimeHarnessTest") {
@@ -427,8 +477,11 @@ tasks {
         commandLine(
             "node", "--test",
             "e2e/build-child-path.test.cjs",
-            "e2e/runtime-coverage.test.cjs"
+            "e2e/process-control.test.cjs",
+            "e2e/runtime-coverage.test.cjs",
+            "e2e/shutdown-log.test.cjs"
         )
+        timeout.set(Duration.ofMinutes(1))
     }
 
     register<Exec>("paperConsoleCommandTest") {
@@ -437,6 +490,7 @@ tasks {
         dependsOn(shadowJar, e2eSupportJar, "commandRuntimeHarnessTest", "installConsoleE2eDependencies")
         workingDir(layout.projectDirectory)
         commandLine("node", "e2e/console/test/console-command-test.cjs")
+        timeout.set(Duration.ofMinutes(7))
         doFirst {
             val javaExecutable = File(System.getProperty("java.home"), "bin/java.exe")
                 .takeIf(File::isFile) ?: File(System.getProperty("java.home"), "bin/java")
@@ -445,6 +499,7 @@ tasks {
             environment("WM_E2E_SUPPORT_JAR", e2eSupportJar.get().archiveFile.get().asFile.absolutePath)
             environment("WM_JAVA_EXECUTABLE", javaExecutable.absolutePath)
             environment("WM_CONSOLE_TEST_SERVER_DIR", layout.buildDirectory.dir("console-command-test").get().asFile.absolutePath)
+            configureLuckPermsEnvironment()
         }
     }
 
@@ -454,6 +509,7 @@ tasks {
         dependsOn(shadowJar, e2eSupportJar, "commandRuntimeHarnessTest", "playerE2eStrategyTest")
         workingDir(layout.projectDirectory)
         commandLine("node", "e2e/player/test/player-smoke.cjs")
+        timeout.set(Duration.ofMinutes(11))
         doFirst {
             val javaExecutable = File(System.getProperty("java.home"), "bin/java.exe")
                 .takeIf(File::isFile) ?: File(System.getProperty("java.home"), "bin/java")
@@ -471,25 +527,7 @@ tasks {
             environment("WM_VIABACKWARDS_FILE_NAME", "ViaBackwards-$viaBackwardsVersion.jar")
             environment("WM_VIABACKWARDS_URL", "https://hangarcdn.papermc.io/plugins/ViaVersion/ViaBackwards/versions/$viaBackwardsVersion/PAPER/ViaBackwards-$viaBackwardsVersion.jar")
             environment("WM_VIABACKWARDS_SHA256", providers.gradleProperty("viaBackwardsSha256").get())
-            providers.gradleProperty("luckPermsPluginJar").orNull?.let { configured ->
-                val jar = file(configured)
-                if (!jar.isFile) {
-                    throw GradleException("LuckPerms plugin JAR does not exist: ${jar.absolutePath}")
-                }
-                environment("WM_LUCKPERMS_PLUGIN_JAR", jar.absolutePath)
-            } ?: rootDir.parentFile.resolve("LuckPerms/bukkit/loader/build/libs")
-                .listFiles { candidate ->
-                    candidate.isFile && candidate.name.matches(Regex("LuckPerms-Bukkit-.+\\.jar", RegexOption.IGNORE_CASE))
-                }
-                ?.maxByOrNull(File::lastModified)
-                ?.let { environment("WM_LUCKPERMS_PLUGIN_JAR", it.absolutePath) }
-            environment("WM_LUCKPERMS_CACHE_DIR", File(gradle.gradleUserHomeDir, "caches/worldmanagement/luckperms").absolutePath)
-            environment("WM_LUCKPERMS_FILE_NAME", "LuckPerms-Bukkit-5.5.53.jar")
-            environment("WM_LUCKPERMS_URL", "https://cdn.modrinth.com/data/Vebnzrzj/versions/MBSY8toc/LuckPerms-Bukkit-5.5.53.jar")
-            environment(
-                "WM_LUCKPERMS_SHA512",
-                "a0e087adfc1c7b9fab8fdb5a430a3331a2ca30bfc72818bb7e65ce9baff051a1490834be8cbb9cbeda292f2e92c44cf03fb829ebeb233ade9d666ed908e49ad5"
-            )
+            configureLuckPermsEnvironment()
             providers.gradleProperty("mineflayerMinecraftVersion").orNull?.let {
                 environment("WM_MINECRAFT_VERSION", it)
             }

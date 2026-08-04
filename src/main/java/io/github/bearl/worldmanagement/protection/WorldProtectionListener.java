@@ -1,6 +1,5 @@
 package io.github.bearl.worldmanagement.protection;
 
-import com.destroystokyo.paper.event.player.PlayerPostRespawnEvent;
 import io.github.bearl.worldmanagement.ownership.WorldAuthorizationService;
 import io.github.bearl.worldmanagement.core.DiagnosticLogger;
 import io.github.bearl.worldmanagement.config.DebugArea;
@@ -26,8 +25,6 @@ import org.bukkit.event.block.BlockBreakEvent;
 import org.bukkit.event.block.BlockPlaceEvent;
 import org.bukkit.event.inventory.InventoryOpenEvent;
 import org.bukkit.event.player.PlayerInteractEvent;
-import org.bukkit.event.player.PlayerChangedWorldEvent;
-import org.bukkit.event.player.PlayerJoinEvent;
 import org.bukkit.event.player.PlayerPortalEvent;
 import org.bukkit.event.player.PlayerTeleportEvent;
 
@@ -39,12 +36,11 @@ public final class WorldProtectionListener implements Listener {
     private final WorldAuthorizationService authorization;
     private final DiagnosticLogger diagnostics;
     private final TeleportBypassTokens teleportBypassTokens;
-    private final PlayerIsolationService playerIsolationService;
     private final ConcurrentHashMap<String, LongAdder> denied = new ConcurrentHashMap<>();
     private final AtomicLong nextSummaryAt = new AtomicLong(System.nanoTime() + TimeUnit.SECONDS.toNanos(30));
 
     public WorldProtectionListener(final WorldManagementService service, final WorldAccessPolicy policy) {
-        this(service, policy, null, new TeleportBypassTokens(), null);
+        this(service, policy, null, new TeleportBypassTokens());
     }
 
     public WorldProtectionListener(
@@ -52,7 +48,7 @@ public final class WorldProtectionListener implements Listener {
         final WorldAccessPolicy policy,
         final DiagnosticLogger diagnostics
     ) {
-        this(service, policy, diagnostics, new TeleportBypassTokens(), null);
+        this(service, policy, diagnostics, new TeleportBypassTokens());
     }
 
     public WorldProtectionListener(
@@ -61,21 +57,10 @@ public final class WorldProtectionListener implements Listener {
         final DiagnosticLogger diagnostics,
         final TeleportBypassTokens teleportBypassTokens
     ) {
-        this(service, policy, diagnostics, teleportBypassTokens, null);
-    }
-
-    public WorldProtectionListener(
-        final WorldManagementService service,
-        final WorldAccessPolicy policy,
-        final DiagnosticLogger diagnostics,
-        final TeleportBypassTokens teleportBypassTokens,
-        final PlayerIsolationService playerIsolationService
-    ) {
         this.service = Objects.requireNonNull(service, "service");
         this.authorization = new WorldAuthorizationService(Objects.requireNonNull(policy, "policy"));
         this.diagnostics = diagnostics;
         this.teleportBypassTokens = Objects.requireNonNull(teleportBypassTokens, "teleportBypassTokens");
-        this.playerIsolationService = playerIsolationService;
     }
 
     @EventHandler(priority = EventPriority.HIGHEST, ignoreCancelled = true)
@@ -108,21 +93,6 @@ public final class WorldProtectionListener implements Listener {
         }
         event.setCancelled(true);
         recordDenied(event.getTo().getWorld(), "entry");
-    }
-
-    @EventHandler(priority = EventPriority.MONITOR)
-    public void onJoin(final PlayerJoinEvent event) {
-        relocateIfIsolated(event.getPlayer());
-    }
-
-    @EventHandler(priority = EventPriority.MONITOR)
-    public void onChangedWorld(final PlayerChangedWorldEvent event) {
-        relocateIfIsolated(event.getPlayer());
-    }
-
-    @EventHandler(priority = EventPriority.MONITOR)
-    public void onPostRespawn(final PlayerPostRespawnEvent event) {
-        relocateIfIsolated(event.getPlayer());
     }
 
     @EventHandler(priority = EventPriority.HIGHEST, ignoreCancelled = true)
@@ -174,14 +144,6 @@ public final class WorldProtectionListener implements Listener {
         }
         final PaperWorldIdentity observed = PaperWorldIdentity.capture(world);
         return service.resolveRuntimeWorld(observed.snapshot(), observed.lifecycleCapability());
-    }
-
-    private void relocateIfIsolated(final Player player) {
-        if (playerIsolationService != null) {
-            playerIsolationService.relocateIfNeeded(
-                player.getUniqueId(), runtimeWorld(player.getWorld()), bypasses(player)
-            );
-        }
     }
 
     private static boolean bypasses(final Player player) {

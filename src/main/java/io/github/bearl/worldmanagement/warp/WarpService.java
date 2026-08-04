@@ -55,19 +55,19 @@ public final class WarpService {
     }
 
     public CompletableFuture<WorldManagementService.UpdateResult> set(final String worldName, final WorldWarp warp) {
-        return metadataService.update(worldName, metadata -> metadata.withWarp(warp));
+        return metadataService.updateManaged(worldName, metadata -> metadata.withWarp(warp));
     }
 
     public CompletableFuture<WorldManagementService.UpdateResult> set(final String worldName, final WorldWarp warp, final AuditEvent event) {
-        return metadataService.update(worldName, metadata -> metadata.withWarp(warp), event);
+        return metadataService.updateManaged(worldName, metadata -> metadata.withWarp(warp), event);
     }
 
     public CompletableFuture<WorldManagementService.UpdateResult> delete(final String worldName, final String warpName) {
-        return metadataService.update(worldName, metadata -> metadata.withoutWarp(warpName));
+        return metadataService.updateManaged(worldName, metadata -> metadata.withoutWarp(warpName));
     }
 
     public CompletableFuture<WorldManagementService.UpdateResult> delete(final String worldName, final String warpName, final AuditEvent event) {
-        return metadataService.update(worldName, metadata -> metadata.withoutWarp(warpName), event);
+        return metadataService.updateManaged(worldName, metadata -> metadata.withoutWarp(warpName), event);
     }
 
     public CompletableFuture<WorldManagementService.UpdateResult> trust(
@@ -76,7 +76,9 @@ public final class WarpService {
         final UUID playerId,
         final boolean trusted
     ) {
-        return metadataService.update(worldName, metadata -> metadata.withTrustedWarpPlayer(warpName, playerId, trusted));
+        return metadataService.updateManaged(
+            worldName, metadata -> metadata.withTrustedWarpPlayer(warpName, playerId, trusted)
+        );
     }
 
     public CompletableFuture<WorldManagementService.UpdateResult> trust(
@@ -86,7 +88,9 @@ public final class WarpService {
         final boolean trusted,
         final AuditEvent event
     ) {
-        return metadataService.update(worldName, metadata -> metadata.withTrustedWarpPlayer(warpName, playerId, trusted), event);
+        return metadataService.updateManaged(
+            worldName, metadata -> metadata.withTrustedWarpPlayer(warpName, playerId, trusted), event
+        );
     }
 
     public CompletableFuture<TeleportResult> teleport(

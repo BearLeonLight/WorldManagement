@@ -72,6 +72,32 @@ final class WorldProtectionListenerTest {
         }
     }
 
+    @Test
+    void unknownFallbackRemainsUnmanagedWhenProtectionIsEnabled() {
+        final PluginIoExecutor executor = new PluginIoExecutor("ProtectionListenerTest");
+        try {
+            final WorldManagementService service = new WorldManagementService(
+                executor, new InMemoryWorldMetadataRepository(), new WorldRegistry()
+            );
+            service.load().join();
+            final WorldProtectionListener listener = new WorldProtectionListener(
+                service, new WorldAccessPolicy()
+            );
+            final Player player = player();
+            final World source = world("minecraft:source", UUID.randomUUID(), 1L);
+            final World fallback = world("minecraft:lobby", WORLD_UUID, 42L);
+            final PlayerTeleportEvent first = event(player, source, fallback);
+            listener.onTeleport(first);
+            final PlayerTeleportEvent second = event(player, source, fallback);
+            listener.onTeleport(second);
+
+            assertFalse(first.isCancelled());
+            assertFalse(second.isCancelled());
+        } finally {
+            executor.shutdown(Duration.ofSeconds(1));
+        }
+    }
+
     private static PlayerTeleportEvent event(final Player player, final World source, final World target) {
         return new PlayerTeleportEvent(
             player,

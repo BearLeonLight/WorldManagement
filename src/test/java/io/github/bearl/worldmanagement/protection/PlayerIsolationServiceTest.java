@@ -77,7 +77,7 @@ final class PlayerIsolationServiceTest {
 
             assertEquals(
                 PlayerIsolationService.RelocationStatus.SCHEDULED,
-                isolation.relocateIfNeeded(PLAYER_ID, WorldRuntimeResolution.isolated(conflicted), false)
+                isolation.relocateIfNeeded(PLAYER_ID, WorldRuntimeResolution.isolated(conflicted))
             );
             assertEquals(fallback, requestedTarget.get());
             assertTrue(tokens.consume(PLAYER_ID, fallback));
@@ -89,7 +89,7 @@ final class PlayerIsolationServiceTest {
     }
 
     @Test
-    void bypassSkipsRelocationAndUnavailableFallbackWarningsAreRateLimited() {
+    void unavailableFallbackWarningsAreRateLimited() {
         final PluginIoExecutor executor = new PluginIoExecutor("PlayerIsolationTest");
         try {
             final WorldManagementService metadata = new WorldManagementService(
@@ -103,7 +103,7 @@ final class PlayerIsolationServiceTest {
             final LoadedWorldCatalog loadedWorlds = new LoadedWorldCatalog();
             loadedWorlds.loaded(new WorldRuntimeGateway.LifecycleWorld(
                 new WorldIdentitySnapshot(
-                    fallbackIdentity.paperKey(), fallbackIdentity.worldUuid(), fallbackIdentity.environment(),
+                    fallbackIdentity.paperKey(), UUID.randomUUID(), fallbackIdentity.environment(),
                     99L, fallbackIdentity.generateStructures()
                 ),
                 LifecycleCapability.MANAGED
@@ -131,18 +131,145 @@ final class PlayerIsolationServiceTest {
             );
             final WorldRuntimeResolution isolated = WorldRuntimeResolution.isolated(conflicted);
 
-            assertEquals(PlayerIsolationService.RelocationStatus.BYPASSED,
-                isolation.relocateIfNeeded(PLAYER_ID, isolated, true));
             assertEquals(PlayerIsolationService.RelocationStatus.FALLBACK_UNAVAILABLE,
-                isolation.relocateIfNeeded(PLAYER_ID, isolated, false));
+                isolation.relocateIfNeeded(PLAYER_ID, isolated));
             assertEquals(PlayerIsolationService.RelocationStatus.FALLBACK_UNAVAILABLE,
-                isolation.relocateIfNeeded(PLAYER_ID, isolated, false));
+                isolation.relocateIfNeeded(PLAYER_ID, isolated));
             now.set(110L);
             assertEquals(PlayerIsolationService.RelocationStatus.FALLBACK_UNAVAILABLE,
-                isolation.relocateIfNeeded(PLAYER_ID, isolated, false));
+                isolation.relocateIfNeeded(PLAYER_ID, isolated));
 
             assertEquals(0, teleportCalls.get());
             assertEquals(2, warnings.size());
+        } finally {
+            executor.shutdown(Duration.ofSeconds(1));
+        }
+    }
+
+    @Test
+    void unavailableFallbackWarningRetentionIsBounded() {
+        final PluginIoExecutor executor = new PluginIoExecutor("PlayerIsolationTest");
+        try {
+            final WorldManagementService metadata = new WorldManagementService(
+                executor, new InMemoryWorldMetadataRepository(), new WorldRegistry()
+            );
+            metadata.load().join();
+            final PlayerIsolationService isolation = new PlayerIsolationService(
+                metadata,
+                new LoadedWorldCatalog(),
+                Optional.empty(),
+                (playerId, target, coordinates) -> CompletableFuture.completedFuture(true),
+                new TeleportBypassTokens(),
+                ignored -> { }
+            );
+
+            for (int index = 0; index < 300; index++) {
+                final String worldId = "isolated_" + index;
+                final WorldMetadata conflicted = WorldMetadata.createDefault(worldId, true)
+                    .withObservedIdentity(new WorldIdentitySnapshot(
+                        "minecraft:" + worldId,
+                        new UUID(0L, index + 1L),
+                        WorldEnvironment.NORMAL,
+                        42L,
+                        true
+                    ));
+                isolation.relocateIfNeeded(PLAYER_ID, WorldRuntimeResolution.isolated(conflicted));
+            }
+
+            assertTrue(isolation.retainedWarningCount() <= 256);
+        } finally {
+            executor.shutdown(Duration.ofSeconds(1));
+        }
+    }
+
+    @Test
+    void unavailableFallbackWarningOverflowIsGloballyRateLimited() {
+        final PluginIoExecutor executor = new PluginIoExecutor("PlayerIsolationTest");
+        try {
+            final WorldManagementService metadata = new WorldManagementService(
+                executor, new InMemoryWorldMetadataRepository(), new WorldRegistry()
+            );
+            metadata.load().join();
+            final ArrayList<String> warnings = new ArrayList<>();
+            final AtomicLong now = new AtomicLong(100L);
+            final PlayerIsolationService isolation = new PlayerIsolationService(
+                metadata,
+                new LoadedWorldCatalog(),
+                Optional.empty(),
+                (playerId, target, coordinates) -> CompletableFuture.completedFuture(true),
+                new TeleportBypassTokens(),
+                warnings::add,
+                now::get,
+                Duration.ofNanos(10L)
+            );
+
+            for (int index = 0; index < 258; index++) {
+                isolation.relocateIfNeeded(PLAYER_ID, isolatedWorld("isolated_" + index, index + 1L));
+            }
+            assertEquals(257, warnings.size());
+
+            now.set(110L);
+            isolation.relocateIfNeeded(PLAYER_ID, isolatedWorld("isolated_258", 259L));
+
+            assertEquals(258, warnings.size());
+            assertEquals(256, isolation.retainedWarningCount());
+        } finally {
+            executor.shutdown(Duration.ofSeconds(1));
+        }
+    }
+
+    private static WorldRuntimeResolution isolatedWorld(final String worldId, final long uuidBits) {
+        return WorldRuntimeResolution.isolated(
+            WorldMetadata.createDefault(worldId, true).withObservedIdentity(new WorldIdentitySnapshot(
+                "minecraft:" + worldId,
+                new UUID(0L, uuidBits),
+                WorldEnvironment.NORMAL,
+                42L,
+                true
+            ))
+        );
+    }
+
+    @Test
+    void relocatesToAnExactPinnedUnknownFallback() {
+        final PluginIoExecutor executor = new PluginIoExecutor("PlayerIsolationTest");
+        try {
+            final WorldManagementService metadata = new WorldManagementService(
+                executor, new InMemoryWorldMetadataRepository(), new WorldRegistry()
+            );
+            metadata.load().join();
+            final WorldIdentitySnapshot fallbackIdentity = new WorldIdentitySnapshot(
+                "minecraft:lobby", FALLBACK_UUID, WorldEnvironment.NORMAL, 42L, true
+            );
+            final LoadedWorldCatalog loadedWorlds = new LoadedWorldCatalog();
+            loadedWorlds.loaded(new WorldRuntimeGateway.LifecycleWorld(
+                fallbackIdentity, LifecycleCapability.MANAGED
+            ));
+            final VerifiedWorldRef fallback = new VerifiedWorldRef(
+                "lobby", "minecraft:lobby", FALLBACK_UUID
+            );
+            final AtomicReference<VerifiedWorldRef> requestedTarget = new AtomicReference<>();
+            final PlayerIsolationService isolation = new PlayerIsolationService(
+                metadata,
+                loadedWorlds,
+                Optional.of(fallback),
+                (playerId, target, coordinates) -> {
+                    requestedTarget.set(target);
+                    return CompletableFuture.completedFuture(true);
+                },
+                new TeleportBypassTokens(),
+                ignored -> { }
+            );
+            final WorldMetadata conflicted = WorldMetadata.createDefault("isolated", true)
+                .withObservedIdentity(new WorldIdentitySnapshot(
+                    "minecraft:isolated", UUID.randomUUID(), WorldEnvironment.NORMAL, 42L, true
+                ));
+
+            assertEquals(
+                PlayerIsolationService.RelocationStatus.SCHEDULED,
+                isolation.relocateIfNeeded(PLAYER_ID, WorldRuntimeResolution.isolated(conflicted))
+            );
+            assertEquals(fallback, requestedTarget.get());
         } finally {
             executor.shutdown(Duration.ofSeconds(1));
         }
@@ -187,10 +314,10 @@ final class PlayerIsolationServiceTest {
             final World isolatedWorld = paperWorld(replacement, scannedPlayers::get);
             final World fallbackWorld = paperWorld(fallbackIdentity, List::of);
             final Player stillIsolated = player(
-                UUID.fromString("55555555-5555-5555-5555-555555555555"), isolatedWorld
+                UUID.fromString("55555555-5555-5555-5555-555555555555"), isolatedWorld, true
             );
             final Player alreadyMoved = player(
-                UUID.fromString("66666666-6666-6666-6666-666666666666"), fallbackWorld
+                UUID.fromString("66666666-6666-6666-6666-666666666666"), fallbackWorld, true
             );
             scannedPlayers.set(List.of(stillIsolated, alreadyMoved));
             final RecordingDispatcher dispatcher = new RecordingDispatcher();
@@ -240,14 +367,14 @@ final class PlayerIsolationServiceTest {
         );
     }
 
-    private static Player player(final UUID playerId, final World world) {
+    private static Player player(final UUID playerId, final World world, final boolean protectionBypass) {
         return (Player) java.lang.reflect.Proxy.newProxyInstance(
             Player.class.getClassLoader(),
             new Class<?>[] {Player.class},
             (proxy, method, arguments) -> switch (method.getName()) {
                 case "getUniqueId" -> playerId;
                 case "getWorld" -> world;
-                case "hasPermission" -> false;
+                case "hasPermission" -> protectionBypass;
                 case "equals" -> proxy == arguments[0];
                 case "hashCode" -> System.identityHashCode(proxy);
                 default -> defaultValue(method.getReturnType());

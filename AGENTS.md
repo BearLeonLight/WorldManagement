@@ -27,6 +27,8 @@
 ## 品質
 
 - 為變更的領域規則與持久化契約新增聚焦測試。
+- 驗證必須由最低成本且能推翻假設的層級開始：聚焦 JUnit、`check`、Paper smoke/console、最後才是需要真實玩家的 E2E。不得為不依賴 Paper runtime 或玩家狀態的變更啟動高成本 E2E。
+- 所有自動化驗證必須有硬性期限。逾時後不得原命令無修改重跑；先停止並清理測試擁有的子程序，再讀取 JUnit 報告或 `build/paper-jar-smoke/latest.log`、`build/console-command-test/latest.log`、`build/player-e2e/latest.log`，將問題縮小為聚焦檢查。
 - 環境允許時，程式碼變更後執行 `./gradlew.bat check`。
 - 可觀察的指令、設定或行為變更時，更新 README 與相應的 `docs/` 契約。
 

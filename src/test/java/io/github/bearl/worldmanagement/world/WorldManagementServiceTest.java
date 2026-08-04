@@ -14,6 +14,7 @@ import java.util.Collection;
 import java.util.Optional;
 import java.util.UUID;
 import java.util.concurrent.CompletionException;
+import java.util.concurrent.CompletableFuture;
 import org.junit.jupiter.api.Test;
 
 final class WorldManagementServiceTest {
@@ -70,6 +71,10 @@ final class WorldManagementServiceTest {
             assertEquals(WorldRuntimeResolution.Status.ISOLATED, service.resolveRuntimeWorld(
                 accepted, LifecycleCapability.EXTERNAL_ONLY
             ).status());
+            service.remove("creative").join();
+            assertEquals(WorldRuntimeResolution.Status.UNMANAGED, service.resolveRuntimeWorld(
+                accepted, LifecycleCapability.MANAGED
+            ).status());
         } finally {
             executor.shutdown(Duration.ofSeconds(1));
         }
@@ -92,6 +97,44 @@ final class WorldManagementServiceTest {
             assertEquals(WorldManagementService.AdoptionStatus.ADOPTED, first.status());
             assertEquals(WorldManagementService.AdoptionStatus.ALREADY_MANAGED, second.status());
             assertTrue(service.managedWorlds().stream().anyMatch(world -> world.worldName().equals("creative")));
+        } finally {
+            executor.shutdown(Duration.ofSeconds(1));
+        }
+    }
+
+    @Test
+    void rejectsIdentityCollisionBeforePersistingAdoptedMetadata() {
+        final PluginIoExecutor executor = new PluginIoExecutor("WorldManagementTest");
+        try {
+            final InMemoryWorldMetadataRepository repository = new InMemoryWorldMetadataRepository();
+            final UUID sharedUuid = UUID.fromString("11111111-1111-1111-1111-111111111111");
+            repository.create(WorldMetadata.createDefault(
+                "existing",
+                new WorldIdentitySnapshot(
+                    "minecraft:existing", sharedUuid, WorldEnvironment.NORMAL, 42L, true
+                ),
+                LifecycleCapability.MANAGED,
+                Optional.empty(),
+                true
+            ));
+            final WorldManagementService service = new WorldManagementService(
+                executor, repository, new WorldRegistry()
+            );
+            service.load().join();
+
+            final WorldManagementService.AdoptionResult result = service.adopt(
+                new WorldIdentitySnapshot(
+                    "minecraft:unknown", sharedUuid, WorldEnvironment.NORMAL, 42L, true
+                ),
+                LifecycleCapability.MANAGED,
+                Optional.empty(),
+                true,
+                null
+            ).join();
+
+            assertEquals(WorldManagementService.AdoptionStatus.IDENTITY_CONFLICT, result.status());
+            assertTrue(repository.find("unknown").isEmpty());
+            assertTrue(service.metadataWorld("unknown").isEmpty());
         } finally {
             executor.shutdown(Duration.ofSeconds(1));
         }
@@ -145,6 +188,37 @@ final class WorldManagementServiceTest {
             assertEquals(Optional.of(observed), result.metadata().pendingIdentity());
             assertEquals(result.metadata(), repository.find("creative").orElseThrow());
             assertEquals(result.metadata(), service.metadataWorld("creative").orElseThrow());
+        } finally {
+            executor.shutdown(Duration.ofSeconds(1));
+        }
+    }
+
+    @Test
+    void detachedLifecycleIdentityCheckNeverMutatesMetadata() {
+        final PluginIoExecutor executor = new PluginIoExecutor("WorldManagementTest");
+        try {
+            final InMemoryWorldMetadataRepository repository = new InMemoryWorldMetadataRepository();
+            final WorldIdentitySnapshot accepted = identity("11111111-1111-1111-1111-111111111111", 42L);
+            repository.create(WorldMetadata.createDefault(
+                "creative", accepted, LifecycleCapability.MANAGED, Optional.empty(), true
+            ).withManagementState(WorldManagementState.DETACHED));
+            final WorldManagementService service = new WorldManagementService(
+                executor, repository, new WorldRegistry()
+            );
+            service.load().join();
+            final WorldMetadata before = service.metadataWorld("creative").orElseThrow();
+
+            final WorldManagementService.UpdateResult matching = service.classifyLifecycleIdentity(
+                accepted, LifecycleCapability.MANAGED
+            ).join();
+            final WorldManagementService.UpdateResult drifted = service.classifyLifecycleIdentity(
+                identity("11111111-1111-1111-1111-111111111111", 99L), LifecycleCapability.MANAGED
+            ).join();
+
+            assertEquals(WorldManagementService.UpdateStatus.UPDATED, matching.status());
+            assertEquals(WorldManagementService.UpdateStatus.NOT_MANAGED, drifted.status());
+            assertEquals(before, service.metadataWorld("creative").orElseThrow());
+            assertEquals(before, repository.find("creative").orElseThrow());
         } finally {
             executor.shutdown(Duration.ofSeconds(1));
         }
@@ -417,7 +491,6 @@ final class WorldManagementServiceTest {
 
             assertEquals(WorldManagementService.RemoveStatus.DETACHED, detached.status());
             assertEquals(WorldManagementState.DETACHED, repository.find("creative").orElseThrow().managementState());
-            assertEquals(WorldLoadState.UNLOADED, repository.find("creative").orElseThrow().desiredState());
             assertTrue(service.detachedWorlds().stream().anyMatch(world -> world.worldName().equals("creative")));
             assertTrue(service.manage("creative", null).join().metadata().managementState() == WorldManagementState.ACTIVE);
             assertEquals(WorldManagementState.ACTIVE, repository.find("creative").orElseThrow().managementState());
@@ -428,6 +501,281 @@ final class WorldManagementServiceTest {
             assertEquals(WorldManagementService.RemoveStatus.PURGED, purged.status());
             assertFalse(repository.find("creative").isPresent());
             assertTrue(service.managedWorld("creative").isEmpty());
+        } finally {
+            executor.shutdown(Duration.ofSeconds(1));
+        }
+    }
+
+    @Test
+    void managedMutationRechecksActiveStateAfterQueuedDetach() throws Exception {
+        final PluginIoExecutor executor = new PluginIoExecutor("WorldManagementTest");
+        try {
+            final BlockingDetachRepository repository = new BlockingDetachRepository();
+            final WorldManagementService service = new WorldManagementService(
+                executor, repository, new WorldRegistry()
+            );
+            service.load().join();
+            service.adopt("creative", true).join();
+
+            final CompletableFuture<WorldManagementService.RemoveResult> detach = service.remove("creative");
+            assertTrue(repository.detachStarted.await(1, java.util.concurrent.TimeUnit.SECONDS));
+            final CompletableFuture<WorldManagementService.UpdateResult> mutation = service.updateManaged(
+                "creative", metadata -> metadata.withOwner("replacement-owner")
+            );
+            repository.releaseDetach.countDown();
+
+            assertEquals(WorldManagementService.RemoveStatus.DETACHED, detach.join().status());
+            assertEquals(WorldManagementService.UpdateStatus.NOT_MANAGED, mutation.join().status());
+            final WorldMetadata detached = repository.find("creative").orElseThrow();
+            assertEquals(WorldManagementState.DETACHED, detached.managementState());
+            assertEquals(WorldMetadata.SERVER_OWNER, detached.owner());
+            assertEquals(1, repository.replaceCalls);
+        } finally {
+            executor.shutdown(Duration.ofSeconds(1));
+        }
+    }
+
+    @Test
+    void marksDeletingOnlyForTheExactQuarantineClaim() {
+        final PluginIoExecutor executor = new PluginIoExecutor("WorldManagementTest");
+        try {
+            final InMemoryWorldMetadataRepository repository = new InMemoryWorldMetadataRepository();
+            final WorldManagementService service = new WorldManagementService(
+                executor, repository, new WorldRegistry()
+            );
+            service.load().join();
+            service.adopt("creative", true).join();
+            final WorldMetadata current = service.managedWorld("creative").orElseThrow();
+            final UUID transactionId = UUID.fromString("11111111-1111-1111-1111-111111111111");
+            final WorldDeletionClaim claim = new WorldDeletionClaim(
+                VerifiedWorldRef.from(current).orElseThrow(), current.version(), transactionId,
+                WorldManagementState.ACTIVE
+            );
+
+            final WorldManagementService.DeletionTransitionResult result =
+                service.markDeleting(claim, null).join();
+
+            assertEquals(WorldManagementService.DeletionTransitionStatus.UPDATED, result.status());
+            final WorldMetadata deleting = repository.find("creative").orElseThrow();
+            assertEquals(WorldManagementState.DELETING, deleting.managementState());
+            assertEquals(Optional.of(transactionId), deleting.deletionTransactionId());
+        } finally {
+            executor.shutdown(Duration.ofSeconds(1));
+        }
+    }
+
+    @Test
+    void queuedIdentityClassificationCannotMutateADeletingTombstone() throws Exception {
+        final PluginIoExecutor executor = new PluginIoExecutor("WorldManagementTest");
+        try {
+            final BlockingDeletingRepository repository = new BlockingDeletingRepository();
+            final WorldManagementService service = new WorldManagementService(
+                executor, repository, new WorldRegistry()
+            );
+            service.load().join();
+            service.adopt("creative", true).join();
+            final WorldMetadata current = service.managedWorld("creative").orElseThrow();
+            final WorldDeletionClaim claim = new WorldDeletionClaim(
+                VerifiedWorldRef.from(current).orElseThrow(), current.version(),
+                UUID.fromString("66666666-6666-4666-8666-666666666666"),
+                WorldManagementState.ACTIVE
+            );
+
+            final CompletableFuture<WorldManagementService.DeletionTransitionResult> deleting =
+                service.markDeleting(claim, null);
+            assertTrue(repository.deletingWriteStarted.await(1, java.util.concurrent.TimeUnit.SECONDS));
+            final CompletableFuture<WorldManagementService.UpdateResult> classification =
+                service.classifyLoadedIdentity(identity(
+                    current.identity().worldUuid().toString(), current.identity().seed() + 1L
+                ));
+            repository.releaseDeletingWrite.countDown();
+
+            assertEquals(WorldManagementService.DeletionTransitionStatus.UPDATED, deleting.join().status());
+            assertEquals(WorldManagementService.UpdateStatus.NOT_MANAGED, classification.join().status());
+            final WorldMetadata tombstone = service.metadataWorld("creative").orElseThrow();
+            assertEquals(WorldManagementState.DELETING, tombstone.managementState());
+            assertEquals(current.version() + 1L, tombstone.version());
+            assertEquals(Optional.of(claim.transactionId()), tombstone.deletionTransactionId());
+        } finally {
+            executor.shutdown(Duration.ofSeconds(1));
+        }
+    }
+
+    @Test
+    void unchangedIdentityClassificationWaitsBehindADeletingTombstone() throws Exception {
+        final PluginIoExecutor executor = new PluginIoExecutor("WorldManagementTest");
+        try {
+            final BlockingDeletingRepository repository = new BlockingDeletingRepository();
+            final WorldManagementService service = new WorldManagementService(
+                executor, repository, new WorldRegistry()
+            );
+            service.load().join();
+            service.adopt("creative", true).join();
+            final WorldMetadata current = service.managedWorld("creative").orElseThrow();
+            final WorldDeletionClaim claim = new WorldDeletionClaim(
+                VerifiedWorldRef.from(current).orElseThrow(), current.version(),
+                UUID.fromString("77777777-7777-4777-8777-777777777777"),
+                WorldManagementState.ACTIVE
+            );
+
+            final CompletableFuture<WorldManagementService.DeletionTransitionResult> deleting =
+                service.markDeleting(claim, null);
+            assertTrue(repository.deletingWriteStarted.await(1, java.util.concurrent.TimeUnit.SECONDS));
+            final CompletableFuture<WorldManagementService.UpdateResult> classification =
+                service.classifyLoadedIdentity(current.identity(), current.lifecycleCapability());
+
+            assertFalse(classification.isDone());
+            repository.releaseDeletingWrite.countDown();
+
+            assertEquals(WorldManagementService.DeletionTransitionStatus.UPDATED, deleting.join().status());
+            assertEquals(WorldManagementService.UpdateStatus.NOT_MANAGED, classification.join().status());
+            assertEquals(WorldManagementState.DELETING, service.metadataWorld("creative").orElseThrow().managementState());
+        } finally {
+            executor.shutdown(Duration.ofSeconds(1));
+        }
+    }
+
+    @Test
+    void unchangedIdentityClassificationDoesNotRewriteMetadata() {
+        final PluginIoExecutor executor = new PluginIoExecutor("WorldManagementTest");
+        try {
+            final CountingReplaceRepository repository = new CountingReplaceRepository();
+            final WorldManagementService service = new WorldManagementService(
+                executor, repository, new WorldRegistry()
+            );
+            service.load().join();
+            service.adopt("creative", true).join();
+            final WorldMetadata before = service.managedWorld("creative").orElseThrow();
+
+            final WorldManagementService.UpdateResult result = service.classifyLoadedIdentity(
+                before.identity(), before.lifecycleCapability()
+            ).join();
+
+            assertEquals(WorldManagementService.UpdateStatus.UPDATED, result.status());
+            assertEquals(0, repository.replaceCalls);
+            assertEquals(before, service.metadataWorld("creative").orElseThrow());
+        } finally {
+            executor.shutdown(Duration.ofSeconds(1));
+        }
+    }
+
+    @Test
+    void publishesDeletingTombstoneAfterAmbiguousRepositoryCommit() {
+        final PluginIoExecutor executor = new PluginIoExecutor("WorldManagementTest");
+        try {
+            final AmbiguousDeletingCommitRepository repository = new AmbiguousDeletingCommitRepository();
+            final WorldManagementService service = new WorldManagementService(
+                executor, repository, new WorldRegistry()
+            );
+            service.load().join();
+            service.adopt("creative", true).join();
+            final WorldMetadata current = service.managedWorld("creative").orElseThrow();
+            final WorldDeletionClaim claim = new WorldDeletionClaim(
+                VerifiedWorldRef.from(current).orElseThrow(), current.version(),
+                UUID.fromString("88888888-8888-4888-8888-888888888888"),
+                WorldManagementState.ACTIVE
+            );
+
+            final WorldManagementService.DeletionTransitionResult result =
+                service.markDeleting(claim, null).join();
+
+            assertEquals(WorldManagementService.DeletionTransitionStatus.UPDATED, result.status());
+            final WorldMetadata tombstone = service.metadataWorld("creative").orElseThrow();
+            assertEquals(WorldManagementState.DELETING, tombstone.managementState());
+            assertEquals(current.version() + 1L, tombstone.version());
+            assertEquals(Optional.of(claim.transactionId()), tombstone.deletionTransactionId());
+            assertEquals(tombstone, repository.find("creative").orElseThrow());
+        } finally {
+            executor.shutdown(Duration.ofSeconds(1));
+        }
+    }
+
+    @Test
+    void rejectsStaleOrMismatchedDeletionClaimsWithoutWritingATombstone() {
+        final PluginIoExecutor executor = new PluginIoExecutor("WorldManagementTest");
+        try {
+            final InMemoryWorldMetadataRepository repository = new InMemoryWorldMetadataRepository();
+            final WorldManagementService service = new WorldManagementService(
+                executor, repository, new WorldRegistry()
+            );
+            service.load().join();
+            service.adopt("creative", true).join();
+            final WorldMetadata current = service.managedWorld("creative").orElseThrow();
+            final UUID transactionId = UUID.fromString("22222222-2222-2222-2222-222222222222");
+
+            final WorldDeletionClaim stale = new WorldDeletionClaim(
+                VerifiedWorldRef.from(current).orElseThrow(), current.version() + 1, transactionId,
+                WorldManagementState.ACTIVE
+            );
+            assertEquals(
+                WorldManagementService.DeletionTransitionStatus.STALE,
+                service.markDeleting(stale, null).join().status()
+            );
+
+            final WorldDeletionClaim wrongIdentity = new WorldDeletionClaim(
+                new VerifiedWorldRef(
+                    "creative", "minecraft:creative",
+                    UUID.fromString("33333333-3333-3333-3333-333333333333")
+                ),
+                current.version(), transactionId, WorldManagementState.ACTIVE
+            );
+            assertEquals(
+                WorldManagementService.DeletionTransitionStatus.STALE,
+                service.markDeleting(wrongIdentity, null).join().status()
+            );
+
+            service.remove("creative").join();
+            final WorldMetadata detached = service.detachedWorld("creative").orElseThrow();
+            final WorldDeletionClaim wrongState = new WorldDeletionClaim(
+                VerifiedWorldRef.from(detached).orElseThrow(), detached.version(), transactionId,
+                WorldManagementState.ACTIVE
+            );
+            assertEquals(
+                WorldManagementService.DeletionTransitionStatus.STALE,
+                service.markDeleting(wrongState, null).join().status()
+            );
+            assertEquals(WorldManagementState.DETACHED, repository.find("creative").orElseThrow().managementState());
+        } finally {
+            executor.shutdown(Duration.ofSeconds(1));
+        }
+    }
+
+    @Test
+    void restoresDeletingStateOnlyForTheMatchingTransaction() {
+        final PluginIoExecutor executor = new PluginIoExecutor("WorldManagementTest");
+        try {
+            final InMemoryWorldMetadataRepository repository = new InMemoryWorldMetadataRepository();
+            final WorldManagementService service = new WorldManagementService(
+                executor, repository, new WorldRegistry()
+            );
+            service.load().join();
+            service.adopt("creative", true).join();
+            final WorldMetadata current = service.managedWorld("creative").orElseThrow();
+            final WorldDeletionClaim claim = new WorldDeletionClaim(
+                VerifiedWorldRef.from(current).orElseThrow(), current.version(),
+                UUID.fromString("44444444-4444-4444-4444-444444444444"),
+                WorldManagementState.ACTIVE
+            );
+            service.markDeleting(claim, null).join();
+            final WorldDeletionClaim wrongTransaction = new WorldDeletionClaim(
+                claim.world(), claim.metadataVersion(),
+                UUID.fromString("55555555-5555-5555-5555-555555555555"),
+                claim.originalManagementState()
+            );
+
+            assertEquals(
+                WorldManagementService.DeletionTransitionStatus.STALE,
+                service.cancelDeleting(wrongTransaction, null).join().status()
+            );
+            assertEquals(WorldManagementState.DELETING, repository.find("creative").orElseThrow().managementState());
+
+            assertEquals(
+                WorldManagementService.DeletionTransitionStatus.UPDATED,
+                service.cancelDeleting(claim, null).join().status()
+            );
+            final WorldMetadata restored = repository.find("creative").orElseThrow();
+            assertEquals(WorldManagementState.ACTIVE, restored.managementState());
+            assertTrue(restored.deletionTransactionId().isEmpty());
         } finally {
             executor.shutdown(Duration.ofSeconds(1));
         }
@@ -488,6 +836,129 @@ final class WorldManagementServiceTest {
         @Override
         public void delete(final String worldName, final long expectedVersion) {
             throw new UnsupportedOperationException();
+        }
+    }
+
+    private static final class BlockingDetachRepository implements WorldMetadataRepository {
+        private final InMemoryWorldMetadataRepository delegate = new InMemoryWorldMetadataRepository();
+        private final java.util.concurrent.CountDownLatch detachStarted = new java.util.concurrent.CountDownLatch(1);
+        private final java.util.concurrent.CountDownLatch releaseDetach = new java.util.concurrent.CountDownLatch(1);
+        private int replaceCalls;
+
+        @Override
+        public Collection<WorldMetadata> loadAll() { return delegate.loadAll(); }
+
+        @Override
+        public Optional<WorldMetadata> find(final String worldName) { return delegate.find(worldName); }
+
+        @Override
+        public void create(final WorldMetadata metadata) { delegate.create(metadata); }
+
+        @Override
+        public void replace(final WorldMetadata metadata, final long expectedVersion) {
+            if (metadata.managementState() == WorldManagementState.DETACHED) {
+                detachStarted.countDown();
+                try {
+                    releaseDetach.await();
+                } catch (final InterruptedException exception) {
+                    Thread.currentThread().interrupt();
+                    throw new StorageException("Interrupted while detaching metadata.", exception);
+                }
+            }
+            replaceCalls++;
+            delegate.replace(metadata, expectedVersion);
+        }
+
+        @Override
+        public void delete(final String worldName, final long expectedVersion) {
+            delegate.delete(worldName, expectedVersion);
+        }
+    }
+
+    private static final class BlockingDeletingRepository implements WorldMetadataRepository {
+        private final InMemoryWorldMetadataRepository delegate = new InMemoryWorldMetadataRepository();
+        private final java.util.concurrent.CountDownLatch deletingWriteStarted =
+            new java.util.concurrent.CountDownLatch(1);
+        private final java.util.concurrent.CountDownLatch releaseDeletingWrite =
+            new java.util.concurrent.CountDownLatch(1);
+
+        @Override
+        public Collection<WorldMetadata> loadAll() { return delegate.loadAll(); }
+
+        @Override
+        public Optional<WorldMetadata> find(final String worldName) { return delegate.find(worldName); }
+
+        @Override
+        public void create(final WorldMetadata metadata) { delegate.create(metadata); }
+
+        @Override
+        public void replace(final WorldMetadata metadata, final long expectedVersion) {
+            if (metadata.managementState() == WorldManagementState.DELETING) {
+                deletingWriteStarted.countDown();
+                try {
+                    releaseDeletingWrite.await();
+                } catch (final InterruptedException exception) {
+                    Thread.currentThread().interrupt();
+                    throw new StorageException("Interrupted while writing deleting metadata.", exception);
+                }
+            }
+            delegate.replace(metadata, expectedVersion);
+        }
+
+        @Override
+        public void delete(final String worldName, final long expectedVersion) {
+            delegate.delete(worldName, expectedVersion);
+        }
+    }
+
+    private static final class AmbiguousDeletingCommitRepository implements WorldMetadataRepository {
+        private final InMemoryWorldMetadataRepository delegate = new InMemoryWorldMetadataRepository();
+
+        @Override
+        public Collection<WorldMetadata> loadAll() { return delegate.loadAll(); }
+
+        @Override
+        public Optional<WorldMetadata> find(final String worldName) { return delegate.find(worldName); }
+
+        @Override
+        public void create(final WorldMetadata metadata) { delegate.create(metadata); }
+
+        @Override
+        public void replace(final WorldMetadata metadata, final long expectedVersion) {
+            delegate.replace(metadata, expectedVersion);
+            if (metadata.managementState() == WorldManagementState.DELETING) {
+                throw new StorageException("simulated lost commit acknowledgement");
+            }
+        }
+
+        @Override
+        public void delete(final String worldName, final long expectedVersion) {
+            delegate.delete(worldName, expectedVersion);
+        }
+    }
+
+    private static final class CountingReplaceRepository implements WorldMetadataRepository {
+        private final InMemoryWorldMetadataRepository delegate = new InMemoryWorldMetadataRepository();
+        private int replaceCalls;
+
+        @Override
+        public Collection<WorldMetadata> loadAll() { return delegate.loadAll(); }
+
+        @Override
+        public Optional<WorldMetadata> find(final String worldName) { return delegate.find(worldName); }
+
+        @Override
+        public void create(final WorldMetadata metadata) { delegate.create(metadata); }
+
+        @Override
+        public void replace(final WorldMetadata metadata, final long expectedVersion) {
+            replaceCalls++;
+            delegate.replace(metadata, expectedVersion);
+        }
+
+        @Override
+        public void delete(final String worldName, final long expectedVersion) {
+            delegate.delete(worldName, expectedVersion);
         }
     }
 }

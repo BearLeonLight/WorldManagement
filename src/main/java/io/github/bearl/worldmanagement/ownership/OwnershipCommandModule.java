@@ -120,10 +120,9 @@ public final class OwnershipCommandModule implements WorldManagementCommandModul
             final String actor = actor(sender);
             final AuditEvent event = event(actor, "world.owner", worldName, "owner=" + owner);
             final CommandMessageSender.Target responseTarget = messageSender.capture(sender);
-            final Runnable action = () -> service.update(worldName, metadata -> metadata.withOwner(owner),
+            final Runnable action = () -> service.updateManaged(worldName, metadata -> metadata.withOwner(owner),
                 event).whenComplete((result, failure) ->
-                respond(responseTarget, failure == null && result.status() == WorldManagementService.UpdateStatus.UPDATED
-                    ? "ownership.owner.success" : "ownership.owner.failure"));
+                respondMutation(responseTarget, "ownership.owner", result, failure));
             if (auditService.requiresStrictAdmission("world.owner")) {
                 auditService.admit(actor, "world.owner", worldName, "pending").thenAccept(admission -> {
                     if (admission == AuditAdmission.REJECTED) respond(responseTarget, "command.audit-rejected");
@@ -146,10 +145,9 @@ public final class OwnershipCommandModule implements WorldManagementCommandModul
         final CommandMessageSender.Target responseTarget = messageSender.capture(sender);
         try {
             final String operation = arguments[2].toLowerCase(Locale.ROOT);
-            service.update(worldName, metadata -> accessMutation(metadata, operation, arguments[3]),
+            service.updateManaged(worldName, metadata -> accessMutation(metadata, operation, arguments[3]),
                 event(sender, "world.access", worldName, "operation=" + operation)).whenComplete((result, failure) ->
-                respond(responseTarget, failure == null && result.status() == WorldManagementService.UpdateStatus.UPDATED
-                    ? "ownership.access.success" : "ownership.access.failure"));
+                respondMutation(responseTarget, "ownership.access", result, failure));
         } catch (final IllegalArgumentException exception) { send(sender, "ownership.access.invalid"); }
         return true;
     }
@@ -164,12 +162,40 @@ public final class OwnershipCommandModule implements WorldManagementCommandModul
         final CommandMessageSender.Target responseTarget = messageSender.capture(sender);
         try {
             final String operation = arguments[1].toLowerCase(Locale.ROOT);
-            service.update(worldName, metadata -> rankMutation(metadata, operation, arguments),
+            service.updateManaged(worldName, metadata -> rankMutation(metadata, operation, arguments),
                 event(sender, "world.rank", worldName, "operation=" + operation)).whenComplete((result, failure) ->
-                respond(responseTarget, failure == null && result.status() == WorldManagementService.UpdateStatus.UPDATED
-                    ? "ownership.rank.success" : "ownership.rank.failure"));
+                respondMutation(responseTarget, "ownership.rank", result, failure));
         } catch (final IllegalArgumentException exception) { send(sender, "ownership.rank.invalid"); }
         return true;
+    }
+
+    private void respondMutation(
+        final CommandMessageSender.Target target,
+        final String keyPrefix,
+        final WorldManagementService.UpdateResult result,
+        final Throwable failure
+    ) {
+        if (failure != null) {
+            respond(target, isInvalidInput(failure) ? keyPrefix + ".invalid" : keyPrefix + ".failure");
+            return;
+        }
+        final String key = switch (result.status()) {
+            case UPDATED -> keyPrefix + ".success";
+            case NOT_MANAGED -> "ownership.world-not-managed";
+            case NOT_READY -> "command.loading";
+        };
+        respond(target, key);
+    }
+
+    private static boolean isInvalidInput(final Throwable failure) {
+        Throwable current = failure;
+        while (current != null) {
+            if (current instanceof IllegalArgumentException) {
+                return true;
+            }
+            current = current.getCause();
+        }
+        return false;
     }
 
     private WorldMetadata accessMutation(final WorldMetadata metadata, final String operation, final String value) {

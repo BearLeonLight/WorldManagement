@@ -10,7 +10,8 @@ public record WorldCreationRequest(
     WorldRuntimeGateway.WorldEnvironment environment,
     WorldRuntimeGateway.WorldType type,
     OptionalLong seed,
-    Optional<WorldGeneratorReference> generator
+    Optional<WorldGeneratorReference> generator,
+    boolean detached
 ) {
 
     public WorldCreationRequest {
@@ -21,5 +22,15 @@ public record WorldCreationRequest(
         Objects.requireNonNull(type, "type");
         seed = Objects.requireNonNull(seed, "seed");
         generator = Objects.requireNonNull(generator, "generator");
+    }
+
+    public WorldCreationRequest(
+        final String worldName,
+        final WorldRuntimeGateway.WorldEnvironment environment,
+        final WorldRuntimeGateway.WorldType type,
+        final OptionalLong seed,
+        final Optional<WorldGeneratorReference> generator
+    ) {
+        this(worldName, environment, type, seed, generator, false);
     }
 }

@@ -32,6 +32,8 @@ disable-model-invocation: false
 5. 完成程式碼變更後，在環境允許時執行：
    `./gradlew.bat check`
 
+JUnit task 的硬期限為3分鐘；Paper smoke、console與player task分別為3、7、11分鐘，runner會在Gradle期限前先清理Paper子程序。任一層級逾時後先讀報告或對應log並縮小重現，不得原命令無修改重跑。
+
 Paper JAR 選擇沿用 Gradle 的 `-PpaperServerJar=<path>`、`-PpaperServerSource=local|download` 與 `-PpaperDownloadChannel=STABLE|BETA|ALPHA`，不得在 skill 內重作下載或版本判斷。
 
 ## 覆蓋與失敗處理
@@ -42,6 +44,7 @@ Paper JAR 選擇沿用 Gradle 的 `-PpaperServerJar=<path>`、`-PpaperServerSour
 - runtime 測試除訊息外，應驗證最接近契約的狀態，例如 metadata、world storage、quarantine、player world/location 或 shutdown marker。
 - replacement/identity respawn驗證必須以server-side respawn或changed-world event及最終安全world作證。若world UUID replacement可能使vanilla個人spawnpoint失效，使用一次性的`PlayerRespawnEvent` fixture明確設定測試目的地，不得把不穩定的中間world或localized聊天訊息當成唯一證據。
 - 測試失敗時先讀取對應 log：console matrix 使用 `build/console-command-test/latest.log`，player E2E 使用 `build/player-e2e/latest.log`，JAR smoke 使用 `build/paper-jar-smoke/latest.log`。
+- 不得在逾時後提高期限來掩蓋未完成的future、網路等待或子程序清理缺陷；只有已證實正常工作負載超出預算時才能調整期限，且須同步更新README。
 - protocol/decode 相容性問題才允許 player E2E 使用既有 Via fallback；spawn 後的指令、狀態或 shutdown 失敗不得切換 fallback 重試。
 - 不得在 Paper thread 等待 future，或為測試繞過 `PluginIoExecutor`、`WorldThreadDispatcher`、mutation gate、權限與 snapshot 邊界。
 

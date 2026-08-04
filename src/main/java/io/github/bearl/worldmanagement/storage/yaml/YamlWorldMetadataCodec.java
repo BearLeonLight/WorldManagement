@@ -20,6 +20,7 @@ import io.github.bearl.worldmanagement.world.WorldIdentitySnapshot;
 import io.github.bearl.worldmanagement.world.WorldLoadState;
 import io.github.bearl.worldmanagement.world.WorldManagementState;
 import io.github.bearl.worldmanagement.world.WorldWarp;
+import io.github.bearl.worldmanagement.world.WorldRegistrationSource;
 import io.github.bearl.worldmanagement.world.WarpVisibility;
 import java.io.ByteArrayInputStream;
 import java.io.IOException;
@@ -34,7 +35,7 @@ import java.util.UUID;
 /** Maps typed world metadata to and from a single BoostedYAML document. */
 public final class YamlWorldMetadataCodec implements WorldMetadataCodec {
 
-    public static final int CURRENT_SCHEMA_VERSION = 2;
+    public static final int CURRENT_SCHEMA_VERSION = 4;
 
     private static final String NONE = "NONE";
     private final DisplayNameValidator displayNameValidator = new DisplayNameValidator();
@@ -58,6 +59,11 @@ public final class YamlWorldMetadataCodec implements WorldMetadataCodec {
                 document.set("creation.generator.id", generator.id());
             });
             document.set("management-state", metadata.managementState().name());
+            document.set(
+                "deletion.transaction-id",
+                metadata.deletionTransactionId().map(UUID::toString).orElse(NONE)
+            );
+            document.set("registration-source", metadata.registrationSource().name());
             document.set("desired-state", metadata.desiredState().name());
             document.set("owner", metadata.owner());
             document.set("version", metadata.version());
@@ -135,7 +141,13 @@ public final class YamlWorldMetadataCodec implements WorldMetadataCodec {
                 parseRanks(requireSection(document, "ranks")),
                 parsePlayerRanks(document.getSection("players")),
                 parseWarps(requireSection(document, "warps")),
-                requireLong(document, "version")
+                requireLong(document, "version"),
+                schemaVersion >= 3
+                    ? parseOptionalUuid(document, "deletion.transaction-id")
+                    : Optional.empty(),
+                schemaVersion >= 4
+                    ? WorldRegistrationSource.valueOf(requireString(document, "registration-source"))
+                    : WorldRegistrationSource.STANDARD
             );
         } catch (final IOException | IllegalArgumentException exception) {
             throw new StorageException("Could not decode world metadata.", exception);
@@ -152,6 +164,11 @@ public final class YamlWorldMetadataCodec implements WorldMetadataCodec {
             }
             throw new StorageException("Could not read world metadata schema version.", exception);
         }
+    }
+
+    private static Optional<UUID> parseOptionalUuid(final YamlDocument document, final String path) {
+        final String value = requireString(document, path);
+        return NONE.equals(value) ? Optional.empty() : Optional.of(UUID.fromString(value));
     }
 
     private static int requireSchemaVersion(final YamlDocument document) {

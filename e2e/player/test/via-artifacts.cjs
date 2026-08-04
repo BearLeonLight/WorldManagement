@@ -8,6 +8,7 @@ async function resolveCheckedArtifact ({
   downloadUrl,
   expectedHash,
   hashAlgorithm,
+  timeoutMilliseconds = 60000,
   fetchImpl = fetch
 }) {
   const targetFile = path.join(cacheDirectory, fileName)
@@ -22,7 +23,8 @@ async function resolveCheckedArtifact ({
   fs.rmSync(temporaryFile, { force: true })
   try {
     const response = await fetchImpl(downloadUrl, {
-      headers: { 'User-Agent': 'WorldManagement-player-E2E' }
+      headers: { 'User-Agent': 'WorldManagement-player-E2E' },
+      signal: AbortSignal.timeout(timeoutMilliseconds)
     })
     if (!response.ok) {
       throw new Error(`Could not download ${fileName}: HTTP ${response.status}.`)

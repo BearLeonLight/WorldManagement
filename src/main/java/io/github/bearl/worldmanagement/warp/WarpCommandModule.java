@@ -129,6 +129,9 @@ public final class WarpCommandModule implements WorldManagementCommandModule {
         final CommandMessageSender.Target responseTarget = messageSender.capture(sender);
         try {
             final WarpVisibility visibility = WarpVisibility.valueOf(arguments[4].toUpperCase(Locale.ROOT));
+            final WorldWarp validated = new WorldWarp(
+                arguments[3], 0, 0, 0, 0, 0, visibility, Set.of(), Set.of(), ""
+            );
             dispatcher.executeFor(player, () -> {
                 if (!canManage(sender, worldName)) {
                     return;
@@ -143,12 +146,14 @@ public final class WarpCommandModule implements WorldManagementCommandModule {
                     send(sender, "warp.set.wrong-world");
                     return;
                 }
-                final WorldWarp warp = new WorldWarp(arguments[3], location.getX(), location.getY(), location.getZ(),
-                    location.getYaw(), location.getPitch(), visibility, Set.of(), Set.of(), "");
+                final WorldWarp warp = new WorldWarp(
+                    validated.name(), location.getX(), location.getY(), location.getZ(),
+                    location.getYaw(), location.getPitch(), validated.visibility(),
+                    validated.trustedPlayers(), validated.trustedRanks(), validated.requiredPermission()
+                );
                 warpService.set(worldName, warp, event(sender, "warp.set", worldName, "name=" + warp.name())).whenComplete((result, failure) ->
-                    respond(responseTarget, failure == null && result.status() == WorldManagementService.UpdateStatus.UPDATED
-                        ? "warp.set.success" : "warp.set.failure", "warp", warp.name()));
-            }, () -> { });
+                    respondUpdate(responseTarget, "warp.set", result, failure, "warp", warp.name()));
+            }, () -> respond(responseTarget, "warp.set.failure"));
         } catch (final IllegalArgumentException exception) {
             send(sender, "warp.set.invalid");
         }
@@ -164,8 +169,7 @@ public final class WarpCommandModule implements WorldManagementCommandModule {
         if (worldName == null || !canManage(sender, worldName)) return true;
         final CommandMessageSender.Target responseTarget = messageSender.capture(sender);
         warpService.delete(worldName, arguments[3], event(sender, "warp.delete", worldName, "name=" + arguments[3])).whenComplete((result, failure) ->
-            respond(responseTarget, failure == null && result.status() == WorldManagementService.UpdateStatus.UPDATED
-                ? "warp.delete.success" : "warp.delete.failure", "warp", arguments[3]));
+            respondUpdate(responseTarget, "warp.delete", result, failure, "warp", arguments[3]));
         return true;
     }
 
@@ -174,20 +178,31 @@ public final class WarpCommandModule implements WorldManagementCommandModule {
             send(sender, "warp.teleport.usage");
             return true;
         }
+        final CommandMessageSender.Target responseTarget = messageSender.capture(sender);
         dispatcher.executeFor(player, () -> {
-            final CommandMessageSender.Target responseTarget = messageSender.capture(sender);
             warpService.teleport(
                 player.getUniqueId(),
                 arguments[2],
                 arguments[3],
                 player.hasPermission(BYPASS_PERMISSION),
                 teleportGateway
-            ).thenAccept(result -> {
-                if (result.status() != WarpService.TeleportStatus.TELEPORTED) {
+            ).whenComplete((result, failure) -> {
+                if (failure != null) {
                     respond(responseTarget, "warp.teleport.failure");
+                    return;
+                }
+                final String key = switch (result.status()) {
+                    case TELEPORTED -> null;
+                    case NOT_MANAGED -> "warp.teleport.not-managed";
+                    case NOT_FOUND -> "warp.teleport.not-found";
+                    case DENIED -> "warp.teleport.denied";
+                    case FAILED -> "warp.teleport.failure";
+                };
+                if (key != null) {
+                    respond(responseTarget, key, "world", arguments[2], "warp", arguments[3]);
                 }
             });
-        }, () -> { });
+        }, () -> respond(responseTarget, "warp.teleport.failure"));
         return true;
     }
 
@@ -208,12 +223,44 @@ public final class WarpCommandModule implements WorldManagementCommandModule {
             final UUID playerId = onlinePlayers.resolve(arguments[5]).orElseThrow(IllegalArgumentException::new);
             warpService.trust(worldName, arguments[3], playerId, trusted,
                 event(sender, "warp.trust", worldName, "name=" + arguments[3] + ",player=" + playerId)).whenComplete((result, failure) ->
-                respond(responseTarget, failure == null && result.status() == WorldManagementService.UpdateStatus.UPDATED
-                    ? "warp.trust.success" : "warp.trust.failure"));
+                respondUpdate(responseTarget, "warp.trust", result, failure));
         } catch (final IllegalArgumentException exception) {
             send(sender, "warp.trust.invalid");
         }
         return true;
+    }
+
+    private void respondUpdate(
+        final CommandMessageSender.Target target,
+        final String keyPrefix,
+        final WorldManagementService.UpdateResult result,
+        final Throwable failure,
+        final String... replacements
+    ) {
+        final String key;
+        if (failure != null) {
+            key = hasCause(failure, IllegalArgumentException.class)
+                ? keyPrefix + ".invalid"
+                : keyPrefix + ".failure";
+        } else {
+            key = switch (result.status()) {
+                case UPDATED -> keyPrefix + ".success";
+                case NOT_MANAGED -> "warp.world-not-managed";
+                case NOT_READY -> "command.loading";
+            };
+        }
+        respond(target, key, replacements);
+    }
+
+    private static boolean hasCause(final Throwable failure, final Class<? extends Throwable> type) {
+        Throwable current = failure;
+        while (current != null) {
+            if (type.isInstance(current)) {
+                return true;
+            }
+            current = current.getCause();
+        }
+        return false;
     }
 
     private String validWorldName(final CommandSender sender, final String value) {

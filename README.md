@@ -17,6 +17,8 @@ WorldManagement 是面向 Paper 伺服器的世界管理插件，目標是提供
 .\gradlew.bat build
 ```
 
+自動化驗證使用有界時間預算：JUnit每個測試預設10秒且`test` task最多3分鐘；`paperJarSmokeTest`、`paperConsoleCommandTest`、`paperPlayerE2eTest`分別最多3、7、11分鐘。Paper與E2E資產下載有連線/讀取期限，Node runner會在Gradle task期限前先停止Paper並關閉log stream。逾時應視為可診斷的測試失敗，先讀取JUnit報告或下列runtime log，不應直接提高期限或無修改重跑。
+
 `clean`只會移除專案`build/`中的編譯產物、報告與隔離 Paper test server，保留可重用的 Node E2E dependencies 和 Gradle user-home downloads。需要重置這些可重建資料或釋放磁碟空間時，個別執行下列 opt-in tasks：
 
 ```powershell
@@ -42,13 +44,13 @@ WorldManagement 是面向 Paper 伺服器的世界管理插件，目標是提供
 
 測試完整伺服器輸出會保留在 `build/paper-jar-smoke/latest.log`，供啟動失敗時檢查。一般 `check` 不會隱式下載或啟動伺服器，確保離線單元測試仍可執行。
 
-不需要玩家身分或遊戲內狀態的 Paper runtime 指令，使用獨立的控制台矩陣。此 task 不執行 `npm ci`，不啟動 Mineflayer，也不安裝 Via；它會驗證 31 個 console runtime leaves、48 個 console command outcomes、Help 與巢狀錯誤導引、root/module aliases、world storage、metadata、identity recovery、quarantine、migration target 與正常 shutdown：
+不需要玩家身分或遊戲內狀態的 Paper runtime 指令，使用獨立的控制台矩陣。此 task 不啟動 Mineflayer，也不安裝 Via；它會驗證32個console runtime leaves、68個console command outcomes、Help與巢狀錯誤導引、unknown runtime unload/delete、restart recovery、root/module aliases、world storage、metadata、identity recovery、quarantine、migration target與正常shutdown：
 
 ```powershell
 .\gradlew.bat paperConsoleCommandTest
 ```
 
-需要玩家 sender、線上玩家名稱快照、實際位置、世界傳送、保護事件、identity隔離或fallback relocation 時，才手動執行選用的Mineflayer測試。此task會在`e2e/player/`執行`npm ci`，先啟動不含跨版本插件的隔離offline-mode Paper server，透過status ping取得實際Minecraft version/protocol，並在Mineflayer支援時直接使用對應原生版本登入。只有版本不在Mineflayer `testedVersions`，或spawn前發生明確protocol/decode相容性錯誤時，才會停止原生attempt、從Hangar按需下載並SHA-256驗證ViaVersion/ViaBackwards 5.11.0，再重啟fallback attempt。成功spawn後的指令、操作與shutdown失敗不會改用Via重試。玩家流程驗證15個必須有玩家的runtime leaves與27個player command outcomes，另以Paper event、dimension、metadata與block final state驗證break/place/interact/container、identity replacement及post-respawn relocation；純console flow不在此task重複執行。此task也會使用`-PluckPermsPluginJar=<path>`指定的LuckPerms JAR、相鄰LuckPerms workspace的最新Bukkit JAR，或從Modrinth取得固定5.5.53 artifact並驗證SHA-512，以真實LuckPerms服務驗證Warp目的世界context：
+需要玩家 sender、線上玩家名稱快照、實際位置、世界傳送、保護事件、identity隔離或fallback relocation 時，才手動執行選用的Mineflayer測試。此task會在`e2e/player/`執行`npm ci`，以`-Xms512M -Xmx1024M`啟動不含跨版本插件的隔離offline-mode Paper server，透過status ping取得實際Minecraft version/protocol，並在Mineflayer支援時直接使用對應原生版本登入。只有版本不在Mineflayer `testedVersions`，或spawn前發生明確protocol/decode相容性錯誤時，才會停止原生attempt、從Hangar按需下載並SHA-256驗證ViaVersion/ViaBackwards 5.11.0，再重啟fallback attempt。成功spawn後的指令、操作與shutdown失敗不會改用Via重試。玩家流程驗證15個player runtime leaves與33個player command outcomes，另以Paper event、dimension、metadata與block final state驗證loaded remove、DETACHED治理與tp、unknown fallback/delete、break/place/interact/container、identity replacement及post-respawn relocation；identity replacement重啟階段會停用Protection模組，確認lifecycle isolation仍獨立運作。此task也會使用`-PluckPermsPluginJar=<path>`指定的LuckPerms JAR、相鄰LuckPerms workspace的最新Bukkit JAR，或從Modrinth取得固定5.5.53 artifact並驗證SHA-512，以真實LuckPerms服務驗證Warp目的世界context：
 
 ```powershell
 .\gradlew.bat paperPlayerE2eTest
@@ -84,7 +86,12 @@ Paper JAR 選擇參數與 `paperJarSmokeTest` 相同。Via fallback 預設動態
 ```text
 /wm adopt events
 /wm import archive NORMAL
+/wm adopt events-staged --detached
+/wm import archive-staged NORMAL --detached
+/wm load archive-cold NORMAL --detached
 ```
+
+`--detached`只登錄 metadata 與 lifecycle 工具，不啟用 Warp、Ownership 或 Protection 治理；DETACHED仍可使用world tp與display-name。若要讓目前受管世界停止治理，但保留 loaded runtime、玩家、metadata、設定與地圖，使用 `/wm remove <world>`；之後可用 `/wm manage <world>` 重新啟用。只有 `purge confirm` 會移除 DETACHED metadata，只有 `delete ... confirm` 會刪除地圖資料。
 
 站在目標世界建立公開Warp，讓玩家使用；私有Warp可用`trust`加入目前線上玩家名稱或UUID：
 
@@ -94,13 +101,15 @@ Paper JAR 選擇參數與 `paperJarSmokeTest` 相同。Via fallback 預設動態
 /wm warp trust survival staff-room add PlayerName
 ```
 
-卸載與永久刪除是不同操作。`unload`保留metadata與世界資料：
+卸載與永久刪除是不同操作。`unload`保留metadata與世界資料。fallback可為任一不同、唯一且已載入的runtime world，不要求先由WorldManagement登錄：
 
 ```text
 /wm unload survival world
 ```
 
-對仍載入的世界執行`delete`時，第一次會搬離玩家、存檔並卸載；管理員確認狀態後必須再次執行相同指令才會永久刪除。若世界原本已卸載，第一次confirmed delete就會進入永久刪除：
+`unload`與`delete`的world completion會列出ACTIVE、DETACHED及目前唯一載入的unknown world；每次指令仍只操作一個指定世界，不是批次刪除。unknown loaded world執行unload時不建立metadata；執行delete時會先從exact runtime identity建立`DELETE_AUTO` DETACHED metadata，再走相同的安全刪除流程。
+
+對仍載入的世界執行`delete`時，第一次會搬離玩家、存檔並卸載；管理員確認狀態後必須再次執行相同指令。第二次會將storage移入quarantine並寫入`DELETING` tombstone，永久刪除由下一次啟動recovery完成：
 
 ```text
 /wm delete survival world confirm
@@ -151,6 +160,7 @@ WorldManagement 在 `INFO` 層級輸出精簡的啟動階段摘要：設定與 s
 [WorldManagement]         Audit service: BEST_EFFORT policy, JSONL backend
 [WorldManagement]         Online player snapshot listener registered
 [WorldManagement]         Protection listener registered
+[WorldManagement]         Lifecycle isolation listener registered
 [WorldManagement]     Services ready: commands, suggestions, audit, and listeners initialized. Took 6ms
 [WorldManagement] Enabled WorldManagement 0.1.0 with YAML metadata storage. Took 55ms
 ```
@@ -170,15 +180,15 @@ WorldManagement 在 `INFO` 層級輸出精簡的啟動階段摘要：設定與 s
 - 世界 owner、rank、access-control 與快取式互動保護
 - 公開/私有 Warp 與線上玩家名稱或 UUID trust（metadata 一律保存 UUID）
 - 同一世界 lifecycle state gate、fallback world 驗證與 entity-affine 非同步玩家傳送
-- metadata-first desired state、啟動/外部載入 bounded reconciliation、顯式存檔後卸載、已載入世界的兩階段 delete confirm、nonblocking delete delay、`DELETING` tombstone、atomic quarantine/restore、同一 runtime 永久刪除、crash recovery 與 external reload abort；第二次確認正常會直接清除世界檔案與 metadata，只有 tombstone 後的永久刪除或 metadata purge 問題才延後至下次啟動 recovery
+- metadata-first desired state、啟動/外部載入 bounded reconciliation、顯式存檔後卸載、unknown loaded runtime unload/delete、已載入世界的兩階段 delete confirm、nonblocking delete delay、transaction-bound `DELETING` tombstone、atomic quarantine/restore、restart-finalized permanent delete、crash recovery 與 external reload abort
 - YAML、SQLite、MySQL/MariaDB metadata provider，且永遠只有一個有效 provider；SQL 使用 HikariCP
 - YAML atomic write、備份、毀損隔離；JSONL rotation 或 SQL audit store
 - SQL metadata mutation 與其成功 audit event 使用同一 JDBC transaction；YAML provider 保持 metadata 原子檔案寫入後的非阻塞 JSONL audit
 - `/wm` 採單一 immutable command specification，經 Paper Brigadier + `PluginBootstrap` 編譯實際 tree；同一 spec 驅動 Help、usage/error、權限/模組可見性、completion、canonical routes與runtime leaf IDs
 - `/wm help [page|command path]` 支援 1-based 分頁與完整巢狀 path；錯誤子指令、缺少或多餘參數會回覆最近可見 usage 與 Help 提示
 - `commands.yml` 可設定 root/module aliases與玩家是否預設免 Help 權限，Help topic與completion會依 sender permission及module enablement過濾
-- completion只讀不可變metadata、線上玩家與每秒更新的管理權限snapshot；world owner只看到自己可管理的世界，`worldmanagement.admin.ownership.manage`或`.warp.manage`可看到對應模組的全部受管世界，最終授權仍由指令執行階段處理
-- `modules.yml` 提供 lifecycle、warp、ownership、protection、storage 的獨立功能開關；停用模組時其 command branch 與 listener 不會啟用
+- completion只讀不可變metadata、loaded-world、線上玩家與每秒更新的管理權限snapshot；delete/unload/fallback可見唯一loaded runtime world，world owner只看到自己可管理的治理世界，最終授權仍由指令執行階段處理
+- `modules.yml` 提供 lifecycle、warp、ownership、protection、storage 的獨立功能開關；停用模組時其 command branch 與治理listener不會啟用。identity conflict與`DELETING` runtime的lifecycle isolation listener永遠啟用
 - `OFF`、`BEST_EFFORT`、`STRICT` audit policy；破壞性操作在 strict audit 無法排入時會拒絕
 - bounded單一I/O worker、migration期間metadata mutation freeze/target rollback，以及不阻塞Paper thread的event-driven shutdown；未提交的teleport會立即拒絕，已提交的`teleportAsync`會與指令結果分離並持續drain到底層Paper future完成；同步shutdown admission失敗不會跳過terminal resource close。terminal resource close由有硬上限的受管daemon worker逐項隔離，既有I/O或close忽略interrupt時仍會嘗試後續資源，逾時future會明確失敗
 - WorldManagement 專用 `OFF/BASIC/VERBOSE` 診斷、area allowlist、Paper console 與 bounded rotating file sink
@@ -196,7 +206,7 @@ MySQL/MariaDB 的 adapter 可使用 [設定與 metadata](docs/configuration.md) 
 
 ## 外部世界工具
 
-WorldManagement 只管理明確登錄的世界。`/wm adopt <world>` 只會為已載入世界建立本插件的 metadata；不改變地圖檔、載入狀態或 Multiverse 等外部工具設定。未登錄世界不套用保護、Warp 或刪除操作。
+WorldManagement 的治理功能只套用於明確登錄的ACTIVE世界。`/wm adopt <world>`只會為已載入世界建立本插件的metadata；不改變地圖檔、載入狀態或Multiverse等外部工具設定。唯一載入的unknown world可執行runtime-only unload，或在confirmed delete時先以exact identity建立DELETE_AUTO DETACHED metadata後進入安全刪除流程；除此之外，未登錄世界不套用保護、Warp或其他metadata操作。
 
 ## 文件
 

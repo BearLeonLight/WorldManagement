@@ -295,12 +295,18 @@ public final class WorldManagementCommand {
                     environment,
                     type,
                     options.seed(),
-                    options.generator().map(io.github.bearl.worldmanagement.world.WorldGeneratorReference::parse)
+                    options.generator().map(io.github.bearl.worldmanagement.world.WorldGeneratorReference::parse),
+                    options.detached()
                 ),
                 event
             )
-                .whenComplete((result, failure) -> respond(responseTarget, failure == null && result.status() == WorldLifecycleCoordinator.CreateStatus.CREATED
-                    ? "command.create.success" : "command.create.failure", "world", worldName)));
+                .whenComplete((result, failure) -> respond(
+                    responseTarget,
+                    failure == null
+                        ? createResultKey("command.create", options.detached(), result.status())
+                        : "command.create.backend-failure",
+                    "world", worldName
+                )));
         } catch (final IllegalArgumentException exception) {
             send(sender, "command.create.invalid");
         }
@@ -308,7 +314,50 @@ public final class WorldManagementCommand {
     }
 
     private boolean load(final CommandSender sender, final String[] arguments) {
+        if (arguments.length == 4 && arguments[3].equals("--detached")) {
+            return loadDetached(sender, arguments);
+        }
         return runLifecycle(sender, arguments, LOAD_PERMISSION, "load", WorldLifecycleCoordinator.LifecycleStatus.LOADED, "loaded");
+    }
+
+    private boolean loadDetached(final CommandSender sender, final String[] arguments) {
+        if (!sender.hasPermission(LOAD_PERMISSION)) {
+            send(sender, "command.permission.lifecycle", "operation", "load");
+            return true;
+        }
+        final String worldName = validWorldName(sender, arguments[1]);
+        if (worldName == null) {
+            return true;
+        }
+        final WorldRuntimeGateway.WorldEnvironment environment;
+        try {
+            environment = WorldRuntimeGateway.WorldEnvironment.valueOf(arguments[2].toUpperCase(Locale.ROOT));
+        } catch (final IllegalArgumentException exception) {
+            send(sender, "command.load.usage");
+            return true;
+        }
+        final String actor = actorOf(sender);
+        final CommandMessageSender.Target responseTarget = messageSender.capture(sender);
+        lifecycleService.validateImportable(worldName).whenComplete((valid, validationFailure) -> {
+            if (validationFailure != null) {
+                respond(responseTarget, "command.load.validation-failure", "world", worldName);
+                return;
+            }
+            if (!valid) {
+                respond(responseTarget, "command.load.not-importable", "world", worldName);
+                return;
+            }
+            threadDispatcher.executeGlobal(() -> lifecycleService.importWorld(
+                worldName, environment, true, auditEvent(actor, "world.load.detached", worldName, "")
+            ).whenComplete((result, failure) -> respond(
+                responseTarget,
+                failure == null
+                    ? createResultKey("command.load", true, result.status())
+                    : "command.load.backend-failure",
+                "world", worldName
+            )));
+        });
+        return true;
     }
 
     private boolean unload(final CommandSender sender, final String[] arguments) {
@@ -371,10 +420,16 @@ public final class WorldManagementCommand {
         final String actor,
         final String worldName
     ) {
-        service.purgeDetached(worldName, auditEvent(actor, "world.remove.purge", worldName, ""))
-            .whenComplete((result, failure) -> respond(responseTarget,
-                failure == null && result.status() == WorldManagementService.RemoveStatus.PURGED
-                    ? "command.remove.purge-success" : "command.remove.purge-failure", "world", worldName));
+        lifecycleService.purgeDetached(worldName, auditEvent(actor, "world.remove.purge", worldName, ""))
+            .whenComplete((result, failure) -> {
+                final String key = failure == null ? switch (result.status()) {
+                    case PURGED -> "command.remove.purge-success";
+                    case OPERATION_IN_PROGRESS -> "command.remove.operation-in-progress";
+                    case NOT_READY -> "command.loading";
+                    default -> "command.remove.purge-failure";
+                } : "command.remove.purge-backend-failure";
+                respond(responseTarget, key, "world", worldName);
+            });
     }
 
     private boolean manage(final CommandSender sender, final String actor, final String[] arguments) {
@@ -391,10 +446,21 @@ public final class WorldManagementCommand {
             return true;
         }
         final CommandMessageSender.Target responseTarget = messageSender.capture(sender);
-        service.manage(worldName, auditEvent(actor, "world.manage", worldName, ""))
-            .whenComplete((result, failure) -> respond(responseTarget,
-                failure == null && result.status() == WorldManagementService.UpdateStatus.UPDATED
-                    ? "command.manage.success" : "command.manage.failure", "world", worldName));
+        lifecycleService.manage(worldName, auditEvent(actor, "world.manage", worldName, ""))
+            .whenComplete((result, failure) -> {
+                if (failure != null) {
+                    respond(responseTarget, "command.manage.backend-failure", "world", worldName);
+                    return;
+                }
+                final String key = switch (result.status()) {
+                    case MANAGED -> "command.manage.success";
+                    case IDENTITY_MISMATCH -> "command.manage.identity-mismatch";
+                    case OPERATION_IN_PROGRESS -> "command.manage.operation-in-progress";
+                    case NOT_READY -> "command.loading";
+                    case NOT_DETACHED -> "command.manage.failure";
+                };
+                respond(responseTarget, key, "world", worldName);
+            });
         return true;
     }
 
@@ -422,7 +488,7 @@ public final class WorldManagementCommand {
             send(sender, "command.tp.player-only");
             return true;
         }
-        final WorldMetadata world = service.managedWorld(request.worldName()).orElse(null);
+        final WorldMetadata world = service.lifecycleWorld(request.worldName()).orElse(null);
         if (world == null) {
             send(sender, "command.tp.not-managed", "world", request.worldName());
             return true;
@@ -433,7 +499,8 @@ public final class WorldManagementCommand {
             return true;
         }
         final boolean bypass = request.any() || sender.hasPermission(BYPASS_PERMISSION);
-        if (!new WorldAccessPolicy().allowsEntry(world, targetPlayer, bypass)) {
+        if (world.managementState() == io.github.bearl.worldmanagement.world.WorldManagementState.ACTIVE
+            && !new WorldAccessPolicy().allowsEntry(world, targetPlayer, bypass)) {
             send(sender, "command.tp.denied", "world", request.worldName());
             return true;
         }
@@ -456,8 +523,13 @@ public final class WorldManagementCommand {
 
     private void removeAfterAdmission(final CommandMessageSender.Target responseTarget, final String actor, final String worldName) {
         lifecycleService.remove(worldName, auditEvent(actor, "world.remove", worldName, ""))
-            .whenComplete((result, failure) -> respond(responseTarget, failure == null && result.status() == WorldLifecycleCoordinator.RemoveStatus.DETACHED
-                ? "command.remove.success" : "command.remove.failure", "world", worldName));
+            .whenComplete((result, failure) -> {
+                if (failure != null) {
+                    respond(responseTarget, "command.remove.backend-failure", "world", worldName);
+                    return;
+                }
+                respond(responseTarget, removeResultKey(result.status()), "world", worldName);
+            });
     }
 
     private boolean importWorld(final CommandSender sender, final String[] arguments) {
@@ -466,10 +538,11 @@ public final class WorldManagementCommand {
             send(sender, "command.permission.import");
             return true;
         }
-        if (arguments.length != 3) {
+        if (arguments.length != 3 && (arguments.length != 4 || !arguments[3].equals("--detached"))) {
             send(sender, "command.import.usage");
             return true;
         }
+        final boolean detached = arguments.length == 4;
         final String worldName = validWorldName(sender, arguments[1]);
         if (worldName == null) {
             return true;
@@ -483,16 +556,23 @@ public final class WorldManagementCommand {
         }
         final CommandMessageSender.Target responseTarget = messageSender.capture(sender);
         lifecycleService.validateImportable(worldName).whenComplete((valid, validationFailure) -> {
-            if (validationFailure != null || !valid) {
+            if (validationFailure != null) {
+                respond(responseTarget, "command.import.validation-failure", "world", worldName);
+                return;
+            }
+            if (!valid) {
                 respond(responseTarget, "command.import.not-importable");
                 return;
             }
             final AuditEvent event = auditEvent(actor, "world.import", worldName, "");
             threadDispatcher.executeGlobal(() -> lifecycleService.importWorld(
-                worldName, environment, event
-            ).whenComplete((result, failure) -> respond(responseTarget,
-                failure == null && result.status() == WorldLifecycleCoordinator.CreateStatus.CREATED
-                    ? "command.import.success" : "command.import.failure", "world", worldName
+                worldName, environment, detached, event
+            ).whenComplete((result, failure) -> respond(
+                responseTarget,
+                failure == null
+                    ? createResultKey("command.import", detached, result.status())
+                    : "command.import.backend-failure",
+                "world", worldName
             )));
         });
         return true;
@@ -544,6 +624,7 @@ public final class WorldManagementCommand {
                     case PENDING_RESTART -> "command.delete.pending-restart";
                     case UNLOADED_REQUIRES_CONFIRMATION -> "command.delete.unloaded-requires-confirmation";
                     case RELOADED -> "command.delete.reloaded";
+                    case RELOADED_AFTER_TOMBSTONE -> "command.delete.reloaded-after-tombstone";
                     case PLAYERS_PRESENT -> "command.delete.players-present";
                     case NOT_MANAGED -> "command.delete.not-managed";
                     case NOT_LOADED -> "command.delete.not-loaded";
@@ -591,10 +672,15 @@ public final class WorldManagementCommand {
         final StorageProvider source,
         final StorageProvider target
     ) {
-        migrationService.migrate(source, target).whenComplete((result, failure) -> respond(responseTarget,
-                failure == null
-                    ? auditedKey(actor, "storage.migrate", "storage", source + "->" + target, "command.storage.success")
-                    : "command.storage.failure", "count", failure == null ? Integer.toString(result.migratedWorlds()) : "0"));
+        migrationService.migrate(source, target).whenComplete((result, failure) -> {
+            final String key = failure == null
+                ? storageResultKey(result.status())
+                : "command.storage.failure";
+            if (failure == null && result.status() == StorageMigrationService.MigrationStatus.MIGRATED) {
+                audit(actor, "storage.migrate", "storage", source + "->" + target);
+            }
+            respond(responseTarget, key, "count", failure == null ? Integer.toString(result.migratedWorlds()) : "0");
+        });
     }
 
     private boolean runLifecycle(
@@ -624,10 +710,12 @@ public final class WorldManagementCommand {
             ? lifecycleService.loadAsync(worldName, auditEvent(actor, "world.load", worldName, ""))
             : lifecycleService.unloadAsync(worldName, fallbackWorld, auditEvent(actor, "world.unload", worldName, fallbackWorld.orElse("")));
         action.whenComplete((result, failure) -> {
-            final String key = failure == null && result.status() == successStatus
-                ? "command.lifecycle.success"
-                : "command.lifecycle.failure";
-            respond(responseTarget, key, "operation", operation, "world", worldName, "result", successVerb);
+            if (failure != null) {
+                respond(responseTarget, "command.lifecycle.failure", "operation", operation, "world", worldName, "result", successVerb);
+                return;
+            }
+            respond(responseTarget, lifecycleResultKey(result.status()),
+                "operation", operation, "world", worldName, "result", successVerb);
         });
         return true;
     }
@@ -647,10 +735,11 @@ public final class WorldManagementCommand {
             send(sender, "command.permission.adopt");
             return true;
         }
-        if (arguments.length != 2) {
+        if (arguments.length != 2 && (arguments.length != 3 || !arguments[2].equals("--detached"))) {
             send(sender, "command.adopt.usage");
             return true;
         }
+        final boolean detached = arguments.length == 3;
         if (!service.isReady()) {
             send(sender, "command.loading");
             return true;
@@ -665,8 +754,10 @@ public final class WorldManagementCommand {
         }
         send(sender, "command.adopt.started", "world", worldName);
         final CommandMessageSender.Target responseTarget = messageSender.capture(sender);
-        lifecycleService.adoptLoadedWorld(worldName, auditEvent(actor, "world.adopt", worldName, ""))
-            .whenComplete((result, throwable) -> sendAdoptionResult(responseTarget, worldName, result, throwable));
+        lifecycleService.adoptLoadedWorld(worldName, detached, auditEvent(actor, "world.adopt", worldName, ""))
+            .whenComplete((result, throwable) -> sendAdoptionResult(
+                responseTarget, worldName, detached, result, throwable
+            ));
         return true;
     }
 
@@ -759,20 +850,81 @@ public final class WorldManagementCommand {
     private void sendAdoptionResult(
         final CommandMessageSender.Target responseTarget,
         final String worldName,
+        final boolean detached,
         final WorldLifecycleCoordinator.AdoptResult result,
         final Throwable throwable
     ) {
         if (throwable != null) {
-            respond(responseTarget, "command.adopt.failure");
+            respond(responseTarget, "command.adopt.backend-failure", "world", worldName);
             return;
         }
-        switch (result.status()) {
-            case ADOPTED -> respond(responseTarget, "command.adopt.success", "world", worldName);
-            case ALREADY_MANAGED -> respond(responseTarget, "command.adopt.already-managed", "world", worldName);
-            case NOT_LOADED -> respond(responseTarget, "command.adopt.loaded-only", "world", worldName);
-            case FAILED, OPERATION_IN_PROGRESS -> respond(responseTarget, "command.adopt.failure", "world", worldName);
-            case NOT_READY -> respond(responseTarget, "command.loading");
-        }
+        respond(responseTarget, adoptResultKey(result.status(), detached), "world", worldName);
+    }
+
+    static String createResultKey(
+        final String keyPrefix,
+        final boolean detached,
+        final WorldLifecycleCoordinator.CreateStatus status
+    ) {
+        return switch (status) {
+            case CREATED -> keyPrefix + (detached ? ".success-detached" : ".success");
+            case ALREADY_EXISTS -> keyPrefix + ".already-exists";
+            case FAILED -> keyPrefix + ".failure";
+            case NOT_READY -> "command.loading";
+            case OPERATION_IN_PROGRESS -> keyPrefix + ".operation-in-progress";
+        };
+    }
+
+    static String removeResultKey(final WorldLifecycleCoordinator.RemoveStatus status) {
+        return switch (status) {
+            case DETACHED -> "command.remove.success";
+            case NOT_MANAGED -> "command.remove.not-managed";
+            case NOT_READY -> "command.loading";
+            case OPERATION_IN_PROGRESS -> "command.remove.operation-in-progress";
+            case NOT_UNLOADED -> "command.remove.not-unloaded";
+            case PURGED -> "command.remove.purge-success";
+        };
+    }
+
+    static String lifecycleResultKey(final WorldLifecycleCoordinator.LifecycleStatus status) {
+        return switch (status) {
+            case LOADED, UNLOADED -> "command.lifecycle.success";
+            case ALREADY_LOADED -> "command.lifecycle.already-loaded";
+            case ALREADY_UNLOADED -> "command.lifecycle.already-unloaded";
+            case NOT_MANAGED -> "command.lifecycle.not-managed";
+            case EXTERNAL_ONLY -> "command.lifecycle.external-only";
+            case PLAYERS_PRESENT -> "command.lifecycle.players-present";
+            case FALLBACK_UNAVAILABLE -> "command.lifecycle.fallback-unavailable";
+            case STORAGE_NOT_FOUND -> "command.lifecycle.storage-not-found";
+            case UNLOAD_FAILED -> "command.lifecycle.save-failed";
+            case OPERATION_IN_PROGRESS -> "command.lifecycle.operation-in-progress";
+            case NOT_READY -> "command.loading";
+            case FAILED -> "command.lifecycle.failure";
+        };
+    }
+
+    static String adoptResultKey(
+        final WorldLifecycleCoordinator.AdoptStatus status,
+        final boolean detached
+    ) {
+        return switch (status) {
+            case ADOPTED -> detached ? "command.adopt.success-detached" : "command.adopt.success";
+            case ALREADY_MANAGED -> "command.adopt.already-managed";
+            case NOT_LOADED -> "command.adopt.loaded-only";
+            case FAILED -> "command.adopt.failure";
+            case NOT_READY -> "command.loading";
+            case OPERATION_IN_PROGRESS -> "command.adopt.operation-in-progress";
+        };
+    }
+
+    static String storageResultKey(final StorageMigrationService.MigrationStatus status) {
+        return switch (status) {
+            case MIGRATED -> "command.storage.success";
+            case SOURCE_NOT_ACTIVE -> "command.storage.source-not-active";
+            case SAME_PROVIDER -> "command.storage.same-provider";
+            case TARGET_NOT_CONFIGURED -> "command.storage.target-not-configured";
+            case TARGET_NOT_EMPTY -> "command.storage.target-not-empty";
+        };
     }
 
     private void send(final CommandSender sender, final String key, final String... replacements) {

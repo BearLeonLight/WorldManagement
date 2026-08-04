@@ -6,11 +6,12 @@ test('returns sorted literal children for one command root', () => {
   const packet = {
     rootIndex: 0,
     nodes: [
-      { children: [1, 4] },
-      { children: [3, 2], extraNodeData: { name: 'wm' } },
-      { children: [], extraNodeData: { name: 'warp' } },
-      { children: [], extraNodeData: { name: 'list' } },
-      { children: [], extraNodeData: { name: 'help' } }
+      { flags: { command_node_type: 0 }, children: [1, 4] },
+      { flags: { command_node_type: 1 }, children: [3, 2, 5], extraNodeData: { name: 'wm' } },
+      { flags: { command_node_type: 1 }, children: [], extraNodeData: { name: 'warp' } },
+      { flags: { command_node_type: 1 }, children: [], extraNodeData: { name: 'list' } },
+      { flags: { command_node_type: 1 }, children: [], extraNodeData: { name: 'help' } },
+      { flags: { command_node_type: 2 }, children: [], extraNodeData: { name: '__wm_invalid' } }
     ]
   }
 
@@ -21,8 +22,8 @@ test('returns sorted literal children for one command root', () => {
 test('accepts a visible command root without executable children', () => {
   const packet = {
     nodes: [
-      { children: [1] },
-      { children: [], extraNodeData: { name: 'wm' } }
+      { flags: { command_node_type: 0 }, children: [1] },
+      { flags: { command_node_type: 1 }, children: [], extraNodeData: { name: 'wm' } }
     ]
   }
 
@@ -32,11 +33,11 @@ test('accepts a visible command root without executable children', () => {
 test('returns children below a nested literal path', () => {
   const packet = {
     nodes: [
-      { children: [1] },
-      { children: [2], extraNodeData: { name: 'wm' } },
-      { children: [4, 3], extraNodeData: { name: 'tp' } },
-      { children: [], extraNodeData: { name: 'self' } },
-      { children: [], extraNodeData: { name: '--any' } }
+      { flags: 0, children: [1] },
+      { flags: 1, children: [2], extraNodeData: { name: 'wm' } },
+      { flags: 1, children: [4, 3], extraNodeData: { name: 'tp' } },
+      { flags: 1, children: [], extraNodeData: { name: 'self' } },
+      { flags: 1, children: [], extraNodeData: { name: '--any' } }
     ]
   }
 
@@ -45,5 +46,5 @@ test('returns children below a nested literal path', () => {
 })
 
 test('rejects malformed command node references', () => {
-  assert.throws(() => literalChildren({ nodes: [{ children: [2] }] }, 'wm'), /invalid node 2/)
+  assert.throws(() => literalChildren({ nodes: [{ flags: 0, children: [2] }] }, 'wm'), /invalid node 2/)
 })

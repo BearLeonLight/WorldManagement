@@ -12,6 +12,7 @@ final class CreateCommandOptionParser {
     CreateCommandOptions parse(final StringReader reader) {
         OptionalLong seed = OptionalLong.empty();
         Optional<String> generator = Optional.empty();
+        boolean detached = false;
         while (hasNext(reader)) {
             final String option = readToken(reader);
             switch (option) {
@@ -31,10 +32,16 @@ final class CreateCommandOptionParser {
                     }
                     generator = Optional.of(requireValue(reader, option));
                 }
+                case "--detached" -> {
+                    if (detached) {
+                        throw new IllegalArgumentException("Duplicate option: --detached");
+                    }
+                    detached = true;
+                }
                 default -> throw new IllegalArgumentException("Unknown create option: " + option);
             }
         }
-        return new CreateCommandOptions(seed, generator);
+        return new CreateCommandOptions(seed, generator, detached);
     }
 
     private static long parseSeed(final String value) {

@@ -51,6 +51,15 @@ public interface WorldRuntimeGateway {
 
     boolean unload(LifecycleWorld world, boolean save);
 
+    /**
+     * Explicitly saves the world data. Must be called before {@link #unload(LifecycleWorld, boolean)}
+     * with {@code save=false} to ensure data is persisted before unloading.
+     *
+     * @param world the world to save
+     * @return true if the save completed successfully
+     */
+    boolean save(LifecycleWorld world);
+
     Optional<LifecycleWorld> findWorld(VerifiedWorldRef expected);
 
     Optional<LifecycleWorld> findLoadedWorldById(String worldId);
@@ -65,8 +74,7 @@ public interface WorldRuntimeGateway {
 
     CompletableFuture<Boolean> teleportPlayersToWorld(LifecycleWorld source, LifecycleWorld target);
 
-    default void cancelPendingOperations() {
-    }
+    CompletableFuture<Void> beginShutdown();
 
     record LifecycleWorld(
         WorldIdentitySnapshot identity,

@@ -20,6 +20,7 @@ import io.github.bearl.worldmanagement.world.WorldLoadState;
 import io.github.bearl.worldmanagement.world.WorldManagementState;
 import io.github.bearl.worldmanagement.world.WorldGeneratorReference;
 import io.github.bearl.worldmanagement.world.WorldMetadata;
+import io.github.bearl.worldmanagement.world.WorldRegistrationSource;
 import io.github.bearl.worldmanagement.world.WorldWarp;
 import java.util.Map;
 import java.util.Optional;
@@ -33,7 +34,7 @@ final class YamlWorldMetadataCodecTest {
   private static final UUID PLAYER_UUID = UUID.fromString("22222222-2222-2222-2222-222222222222");
 
   @Test
-  void roundTripsTheCompleteSchemaTwoAggregate() {
+  void roundTripsTheCompleteSchemaFourAggregate() {
     final WorldIdentitySnapshot accepted = new WorldIdentitySnapshot(
       "minecraft:creative", WORLD_UUID, WorldEnvironment.NORMAL, 42L, true
     );
@@ -70,18 +71,38 @@ final class YamlWorldMetadataCodecTest {
 
     final String encoded = codec.encode(metadata);
 
-    assertTrue(encoded.contains("schema-version: 2"));
+    assertTrue(encoded.contains("schema-version: 4"));
     assertEquals(metadata, codec.decode(encoded));
+  }
+
+  @Test
+  void roundTripsDeleteAutoRegistrationSource() {
+    final WorldMetadata metadata = WorldMetadata.createDefault(
+      "creative",
+      new WorldIdentitySnapshot("minecraft:creative", WORLD_UUID, WorldEnvironment.NORMAL, 42L, true),
+      LifecycleCapability.MANAGED,
+      Optional.empty(),
+      Optional.empty(),
+      WorldManagementState.DETACHED,
+      WorldRegistrationSource.DELETE_AUTO,
+      true
+    );
+    final YamlWorldMetadataCodec codec = new YamlWorldMetadataCodec();
+
+    assertEquals(metadata, codec.decode(codec.encode(metadata)));
   }
 
   @Test
   void decodesSchemaOneWithoutGeneratorProvenance() {
     final YamlWorldMetadataCodec codec = new YamlWorldMetadataCodec();
     final String schemaOne = codec.encode(WorldMetadata.createDefault("creative", true))
-      .replace("schema-version: 2", "schema-version: 1")
+      .replace("schema-version: 4", "schema-version: 1")
+      .replace("registration-source: STANDARD\n", "")
+      .replace("deletion:\n  transaction-id: NONE\n", "")
       .replace("  generator:\n    present: false\n", "");
 
     assertTrue(codec.decode(schemaOne).generator().isEmpty());
+    assertEquals(WorldRegistrationSource.STANDARD, codec.decode(schemaOne).registrationSource());
   }
 
   @Test
@@ -105,12 +126,12 @@ final class YamlWorldMetadataCodecTest {
     final String encoded = codec.encode(WorldMetadata.createDefault("creative", true));
 
     assertThrows(StorageException.class,
-      () -> codec.decode(encoded.replace("schema-version: 2", "schema-version: 0")));
+      () -> codec.decode(encoded.replace("schema-version: 4", "schema-version: 0")));
     assertThrows(StorageException.class,
-      () -> codec.decode(encoded.replace("schema-version: 2", "schema-version: -1")));
+      () -> codec.decode(encoded.replace("schema-version: 4", "schema-version: -1")));
     assertThrows(StorageException.class,
-      () -> codec.decode(encoded.replace("schema-version: 2\n", "")));
+      () -> codec.decode(encoded.replace("schema-version: 4\n", "")));
     assertThrows(UnsupportedStorageSchemaException.class,
-      () -> codec.decode(encoded.replace("schema-version: 2", "schema-version: 3")));
+      () -> codec.decode(encoded.replace("schema-version: 4", "schema-version: 5")));
   }
 }

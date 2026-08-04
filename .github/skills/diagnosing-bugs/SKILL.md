@@ -19,7 +19,7 @@ disable-model-invocation: false
 
 ## 診斷流程
 
-1. **建立回饋迴圈。** 優先建立能觀察使用者實際症狀的 JUnit 測試、聚焦 Gradle test、最小 fixture，或不改動資料的 server log/metrics 重現程序。回饋迴圈必須可由 agent 執行、可重複、明確 red/green，且越快越好。
+1. **建立回饋迴圈。** 優先建立能觀察使用者實際症狀的 JUnit 測試、聚焦 Gradle test、最小 fixture，或不改動資料的 server log/metrics 重現程序。回饋迴圈必須可由 agent 執行、可重複、明確 red/green，且越快越好；所有等待與外部程序必須有硬性期限。
 2. **重現並最小化。** 先確認捕捉到的是原始症狀，再逐一移除非必要的輸入、設定、呼叫者與時間條件。保留最小、仍會失敗的情境。
 3. **建立可推翻假設。** 至少列出三個依可能性排序的假設；每個都要寫成「若 X 為原因，改變或觀察 Y 時會看到 Z」。先將假設與最快的鑑別檢查提供給使用者。
 4. **優先檢查專案高風險邊界。**
@@ -30,7 +30,7 @@ disable-model-invocation: false
    - world 名稱與路徑是否通過核准容器的驗證。
 5. **只做能鑑別假設的探針。** 優先使用 debugger、已存在的 metrics 或聚焦測試。必要的暫時 log 必須有唯一 `[DEBUG-<id>]` 前綴，不能記錄玩家敏感資料，並在修復前移除。
 6. **先寫回歸測試再修復。** 將最小重現固定為透過公開服務、repository abstraction 或 command route 的測試；不要測 private implementation，也不要在測試中以 blocking wait 模擬 Paper callback。
-7. **驗證並清理。** 重跑原始回饋迴圈與回歸測試，移除暫時探針與測試資料。環境允許時執行 `./gradlew.bat check`。
+7. **驗證並清理。** 重跑原始回饋迴圈與回歸測試，移除暫時探針與測試資料。環境允許時執行 `./gradlew.bat check`。驗證逾時時先終止測試擁有的子程序並收集 thread dump、JUnit report 或 Paper log；不得在沒有新診斷資訊或修改的情況下重跑同一命令。
 
 ## 效能問題
 

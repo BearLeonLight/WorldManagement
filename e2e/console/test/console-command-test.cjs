@@ -1,56 +1,95 @@
 const fs = require('node:fs')
 const path = require('node:path')
 const { spawn } = require('node:child_process')
-const { finished } = require('node:stream/promises')
 const assert = require('node:assert/strict')
 const YAML = require('yaml')
 const { assertCommandMatchesPath, assertRuntimeCoverage } = require('../../runtime-coverage.cjs')
 const { resolveBuildChild } = require('../../build-child-path.cjs')
+const {
+  closeLogStream,
+  createChildProcessDeadline,
+  processExited,
+  stopChildProcess,
+  waitForClose
+} = require('../../process-control.cjs')
+const { resolveCheckedArtifact } = require('../../player/test/via-artifacts.cjs')
+const { assertSuccessfulShutdown } = require('../../shutdown-log.cjs')
 
 const PROJECT_ROOT = path.resolve(__dirname, '..', '..', '..')
-const SHUTDOWN_FAILURES = ['zip file error', 'I/O shutdown failed', 'did not drain']
-const SHUTDOWN_COMPLETE = 'WorldManagement terminal shutdown complete.'
 let passedCommands = 0
 const coveredPaths = new Set()
 
 async function main () {
+  const paperProcesses = new Set()
+  const suiteDeadline = createChildProcessDeadline(paperProcesses, 360000, 'Console E2E')
+  try {
+    await runConsoleSuite(paperProcesses)
+  } catch (error) {
+    if (suiteDeadline.expired()) throw suiteDeadline.failure(error)
+    throw error
+  } finally {
+    suiteDeadline.close()
+  }
+}
+
+async function runConsoleSuite (paperProcesses) {
   const configuration = loadConfiguration()
+  configuration.luckPermsPlugin = await resolveLuckPermsArtifact(configuration)
   fs.rmSync(configuration.serverRoot, { recursive: true, force: true })
   prepareServer(configuration)
 
   const consoleLogPath = path.join(configuration.serverRoot, 'console.log')
   const paperLogPath = path.join(configuration.serverRoot, 'logs', 'latest.log')
   const publishedLogPath = path.join(configuration.serverRoot, 'latest.log')
-  const logFile = fs.createWriteStream(consoleLogPath, { encoding: 'utf8' })
+  const first = launchPaper(configuration, consoleLogPath, 'w', paperProcesses)
+  let recoveryTargets
+  try {
+    await waitForLog(consoleLogPath, '[WorldManagement] Enabled WorldManagement', 120000, 'Paper startup', 0, first.paper)
+    recoveryTargets = await runConsoleMatrix(first.paper, paperLogPath, configuration.serverRoot)
+  } finally {
+    await stopPaper(first, 'console Paper', paperProcesses, consoleLogPath, 0)
+  }
+
+  const restartOffset = normalizedLog(consoleLogPath).length
+  const second = launchPaper(configuration, consoleLogPath, 'a', paperProcesses)
+  try {
+    await waitForLog(
+      consoleLogPath, '[WorldManagement] Enabled WorldManagement', 120000,
+      'Paper recovery startup', restartOffset, second.paper
+    )
+    assertRecoveredDeletes(configuration.serverRoot, recoveryTargets)
+  } finally {
+    await stopPaper(second, 'console recovery Paper', paperProcesses, consoleLogPath, restartOffset)
+  }
+
+  fs.copyFileSync(paperLogPath, publishedLogPath)
+  const coveredLeaves = assertRuntimeCoverage('CONSOLE_RUNTIME', coveredPaths)
+  console.log(`Verified ${passedCommands} console command outcomes across ${coveredLeaves} console runtime leaves without a player; log: ${publishedLogPath}`)
+}
+
+function launchPaper (configuration, logPath, flags, paperProcesses) {
+  const logFile = fs.createWriteStream(logPath, { encoding: 'utf8', flags })
   const paper = spawn(configuration.javaExecutable, [
     '-Xms512M', '-Xmx512M',
     '-Dfile.encoding=UTF-8', '-Dstdout.encoding=UTF-8', '-Dstderr.encoding=UTF-8',
     '-jar', 'paper.jar', '--nogui'
   ], { cwd: configuration.serverRoot, stdio: ['pipe', 'pipe', 'pipe'] })
+  paperProcesses.add(paper)
   paper.stdout.pipe(logFile, { end: false })
   paper.stderr.pipe(logFile, { end: false })
+  return { paper, logFile }
+}
 
+async function stopPaper ({ paper, logFile }, label, paperProcesses, logPath, start) {
   try {
-    await waitForLog(consoleLogPath, '[WorldManagement] Enabled WorldManagement', 120000, 'Paper startup')
-    await runConsoleMatrix(paper, paperLogPath, configuration.serverRoot)
-    paper.stdin.write('stop\n')
-    await waitForExit(paper, 30000)
+    await stopChildProcess(paper, label)
+    await waitForClose(paper, 5000, `${label} output close`)
   } finally {
-    if (paper.exitCode === null) paper.kill()
-    logFile.end()
-    await finished(logFile)
+    paperProcesses.delete(paper)
+    await closeLogStream(logFile)
   }
-
-  if (paper.exitCode !== 0) throw new Error(`Paper exited with code ${paper.exitCode}.`)
-  fs.copyFileSync(paperLogPath, publishedLogPath)
-  const shutdownLog = normalizedLog(publishedLogPath)
-  if (!shutdownLog.includes(SHUTDOWN_COMPLETE)) {
-    throw new Error('Paper exited before WorldManagement terminal shutdown completed.')
-  }
-  const shutdownFailure = SHUTDOWN_FAILURES.find(marker => shutdownLog.includes(marker))
-  if (shutdownFailure) throw new Error(`Paper shutdown reported '${shutdownFailure}'.`)
-  const coveredLeaves = assertRuntimeCoverage('CONSOLE_RUNTIME', coveredPaths)
-  console.log(`Verified ${passedCommands} console command outcomes across ${coveredLeaves} console runtime leaves without a player; log: ${publishedLogPath}`)
+  if (paper.exitCode !== 0) throw new Error(`${label} exited with code ${paper.exitCode}.`)
+  assertSuccessfulShutdown(normalizedLog(logPath).slice(start), label)
 }
 
 function loadConfiguration () {
@@ -58,6 +97,14 @@ function loadConfiguration () {
     paperJar: requiredFile('WM_PAPER_JAR'),
     pluginJar: requiredFile('WM_PLUGIN_JAR'),
     e2eSupportJar: requiredFile('WM_E2E_SUPPORT_JAR'),
+    luckPermsPlugin: process.env.WM_LUCKPERMS_PLUGIN_JAR,
+    luckPermsArtifact: {
+      fileName: requiredValue('WM_LUCKPERMS_FILE_NAME'),
+      cacheDirectory: requiredValue('WM_LUCKPERMS_CACHE_DIR'),
+      downloadUrl: requiredValue('WM_LUCKPERMS_URL'),
+      expectedHash: requiredValue('WM_LUCKPERMS_SHA512'),
+      hashAlgorithm: 'sha512'
+    },
     javaExecutable: process.env.WM_JAVA_EXECUTABLE || 'java',
     serverRoot: resolveServerRoot()
   }
@@ -74,6 +121,7 @@ function prepareServer (configuration) {
   fs.copyFileSync(configuration.paperJar, path.join(configuration.serverRoot, 'paper.jar'))
   fs.copyFileSync(configuration.pluginJar, path.join(plugins, path.basename(configuration.pluginJar)))
   fs.copyFileSync(configuration.e2eSupportJar, path.join(plugins, path.basename(configuration.e2eSupportJar)))
+  fs.copyFileSync(configuration.luckPermsPlugin, path.join(plugins, path.basename(configuration.luckPermsPlugin)))
   fs.writeFileSync(path.join(configuration.serverRoot, 'eula.txt'), 'eula=true\n')
   fs.writeFileSync(path.join(configuration.serverRoot, 'server.properties'), [
     'server-port=0',
@@ -139,6 +187,18 @@ function prepareServer (configuration) {
   writeMetadataFixture(worlds, metadataFixture('displayfixture', {
     displayName: '<gold>Initial Fixture</gold>'
   }))
+}
+
+async function resolveLuckPermsArtifact (configuration) {
+  if (configuration.luckPermsPlugin) {
+    const configured = path.resolve(configuration.luckPermsPlugin)
+    if (!fs.statSync(configured).isFile()) throw new Error(`LuckPerms plugin is not a file: ${configured}`)
+    console.log(`Using configured LuckPerms plugin: ${configured}.`)
+    return configured
+  }
+  const resolved = await resolveCheckedArtifact(configuration.luckPermsArtifact)
+  console.log(`Using ${configuration.luckPermsArtifact.fileName} from ${resolved}.`)
+  return resolved
 }
 
 async function runConsoleMatrix (paper, logPath, serverRoot) {
@@ -232,6 +292,23 @@ async function runConsoleMatrix (paper, logPath, serverRoot) {
 
   await command(paper, logPath, 'wm adopt overworld', '世界 overworld 已加入管理', 'wm adopt <world>')
 
+  await feedback(paper, logPath, 'wme2e world create adoptdetached', 'WM_E2E_WORLD_CREATED world=minecraft:adoptdetached loaded=true')
+  await command(
+    paper, logPath, 'wm adopt adoptdetached --detached',
+    '世界 adoptdetached 已登錄，metadata 已保存但不套用治理', 'wm adopt <world> --detached'
+  )
+  assert.equal(readMetadata(serverRoot, 'adoptdetached')['management-state'], 'DETACHED')
+  await command(
+    paper, logPath, 'wm display-name set adoptdetached <gold>Detached Fixture</gold>',
+    '顯示名稱已設為 Detached Fixture。', 'wm display-name set <world> <display-name...>', false
+  )
+  assert.equal(readMetadata(serverRoot, 'adoptdetached')['display-name'], '<gold>Detached Fixture</gold>')
+  await command(paper, logPath, 'wm load adoptdetached', '世界 adoptdetached 已經載入', 'wm load <world>', false)
+  await command(
+    paper, logPath, 'wm remove adoptdetached purge confirm',
+    '已永久清除已停止管理世界 adoptdetached', 'wm remove <world> purge confirm', false
+  )
+
   await command(paper, logPath, 'wm create basic NORMAL NORMAL', '世界 basic 已建立並加入管理', 'wm create <world> <environment> <world-type>')
   const basicStoragePaths = [
     path.join(serverRoot, 'world', 'dimensions', 'minecraft', 'basic'),
@@ -243,13 +320,54 @@ async function runConsoleMatrix (paper, logPath, serverRoot) {
     throw new Error('Paper did not create on-disk storage for basic world.')
   }
   await command(paper, logPath, 'wm create typeonly NORMAL FLAT', '世界 typeonly 已建立並加入管理', 'wm create <world> <environment> <world-type>')
+  await command(
+    paper, logPath, 'wm create createddetached NORMAL FLAT --detached',
+    '世界 createddetached 已建立，metadata 已保存但不套用', 'wm create <world> <environment> <world-type> <options>', false
+  )
+  assert.equal(readMetadata(serverRoot, 'createddetached')['management-state'], 'DETACHED')
+  await command(paper, logPath, 'wm load createddetached', '世界 createddetached 已經載入', 'wm load <world>', false)
+  await command(
+    paper, logPath, 'wm remove createddetached purge confirm',
+    '已永久清除已停止管理世界 createddetached', 'wm remove <world> purge confirm', false
+  )
+  await feedback(paper, logPath, 'wme2e world create runtimeonly', 'WM_E2E_WORLD_CREATED world=minecraft:runtimeonly loaded=true')
+  await command(paper, logPath, 'wm unload runtimeonly', '世界 runtimeonly 已unloaded', 'wm unload <world>', false)
+  assert.equal(
+    fs.existsSync(path.join(serverRoot, 'plugins', 'WorldManagement', 'worlds', 'runtimeonly.yml')),
+    false,
+    'Runtime-only unload must not create metadata.'
+  )
+  await command(
+    paper, logPath, 'wm load runtimeonly NORMAL --detached',
+    '世界 runtimeonly 已載入，metadata 已保存但不套用治理',
+    'wm load <world> <environment> --detached'
+  )
+  assert.equal(readMetadata(serverRoot, 'runtimeonly')['management-state'], 'DETACHED')
   await command(paper, logPath, 'wm create imported NORMAL FLAT --seed 12345', '世界 imported 已建立並加入管理', 'wm create <world> <environment> <world-type> <options>')
   await command(paper, logPath, 'wm unload imported', '世界 imported 已unloaded', 'wm unload <world>')
   await command(paper, logPath, 'wm load imported', '世界 imported 已loaded', 'wm load <world>')
   await command(paper, logPath, 'wm unload imported', '世界 imported 已unloaded', 'wm unload <world>')
   await command(paper, logPath, 'wm remove imported', '世界 imported 已停止管理', 'wm remove <world>')
   await command(paper, logPath, 'wm remove imported purge confirm', '已永久清除已停止管理世界 imported', 'wm remove <world> purge confirm')
-  await command(paper, logPath, 'wm import imported NORMAL', '世界 imported 已匯入並加入管理', 'wm import <world> <environment>')
+  await command(
+    paper, logPath, 'wm import imported NORMAL --detached',
+    '世界 imported 已匯入，metadata 已保存但不套用治理', 'wm import <world> <environment> --detached'
+  )
+  assert.equal(readMetadata(serverRoot, 'imported')['management-state'], 'DETACHED')
+  await command(paper, logPath, 'wm unload imported', '世界 imported 已unloaded', 'wm unload <world>', false)
+  await command(paper, logPath, 'wm load imported', '世界 imported 已loaded', 'wm load <world>', false)
+  await command(paper, logPath, 'wm manage imported', '世界 imported 已重新加入管理', 'wm manage <world>', false)
+  await command(paper, logPath, 'wm unload imported', '世界 imported 已unloaded', 'wm unload <world>', false)
+  await command(paper, logPath, 'wm remove imported', '世界 imported 已停止管理', 'wm remove <world>', false)
+  await command(
+    paper, logPath, 'wm remove imported purge confirm',
+    '已永久清除已停止管理世界 imported', 'wm remove <world> purge confirm', false
+  )
+  await command(
+    paper, logPath, 'wm import imported NORMAL',
+    '世界 imported 已匯入並加入管理', 'wm import <world> <environment>'
+  )
+  assert.equal(readMetadata(serverRoot, 'imported')['management-state'], 'ACTIVE')
 
   await command(paper, logPath, 'wm ownership owner remove overworld', '世界擁有者已更新', 'wm ownership owner remove <world>')
   await command(paper, logPath, 'wm ownership rank create overworld builder', '世界階級設定已更新', 'wm ownership rank create <world> <rank>')
@@ -270,29 +388,79 @@ async function runConsoleMatrix (paper, logPath, serverRoot) {
   await command(paper, logPath, 'wm remove archive purge confirm', '已永久清除已停止管理世界 archive', 'wm remove <world> purge confirm')
 
   await command(paper, logPath, 'wm delete basic confirm', '世界 basic 已完成存檔並卸載', 'wm delete <world> confirm')
-  await command(paper, logPath, 'wm delete basic confirm', '世界 basic 已永久刪除', 'wm delete <world> confirm')
-  if (fs.existsSync(path.join(serverRoot, 'plugins', 'WorldManagement', 'worlds', 'basic.yml'))) {
-    throw new Error('Console delete left basic metadata behind.')
-  }
-  if (basicStoragePaths.some(candidate => fs.existsSync(candidate))) {
-    throw new Error('Console delete left basic world storage behind.')
-  }
-  if (findDirectories(serverRoot, '.worldmanagement-quarantine').length > 0) {
-    throw new Error('Console delete left a world quarantine behind.')
-  }
+  await command(paper, logPath, 'wm delete basic confirm', '將於下次伺服器啟動時完成刪除', 'wm delete <world> confirm')
+  assertDeletingMetadata(readMetadata(serverRoot, 'basic'), 'STANDARD')
+
+  await feedback(paper, logPath, 'wme2e world create autodelete', 'WM_E2E_WORLD_CREATED world=minecraft:autodelete loaded=true')
+  await command(
+    paper, logPath, 'wm delete autodelete confirm',
+    '世界 autodelete 已完成存檔並卸載', 'wm delete <world> confirm', false
+  )
+  assert.equal(readMetadata(serverRoot, 'autodelete')['management-state'], 'DETACHED')
+  assert.equal(readMetadata(serverRoot, 'autodelete')['registration-source'], 'DELETE_AUTO')
+  await command(
+    paper, logPath, 'wm delete autodelete confirm',
+    '將於下次伺服器啟動時完成刪除', 'wm delete <world> confirm', false
+  )
+  assertDeletingMetadata(readMetadata(serverRoot, 'autodelete'), 'DELETE_AUTO')
+  assert.ok(
+    findDirectories(serverRoot, '.worldmanagement-quarantine').length > 0,
+    'Pending restart delete must retain a quarantine claim.'
+  )
 
   await command(paper, logPath, 'wmstore migrate INVALID SQLITE confirm', '未知的儲存供應者', 'wm storage migrate <source> <target> confirm')
   await command(paper, logPath, 'wm storage migrate YAML SQLITE confirm', '已遷移', 'wm storage migrate <source> <target> confirm')
   if (!fs.existsSync(path.join(serverRoot, 'plugins', 'WorldManagement', 'migration-target.db'))) {
     throw new Error('Console storage migration did not create the SQLite target.')
   }
+  return [
+    { worldId: 'basic', storagePaths: basicStoragePaths },
+    {
+      worldId: 'autodelete',
+      storagePaths: [
+        path.join(serverRoot, 'world', 'dimensions', 'minecraft', 'autodelete'),
+        path.join(serverRoot, 'autodelete')
+      ]
+    }
+  ]
+}
+
+function assertDeletingMetadata (metadata, registrationSource) {
+  assert.equal(metadata['management-state'], 'DELETING')
+  assert.equal(metadata['registration-source'], registrationSource)
+  assert.match(
+    metadata.deletion?.['transaction-id'],
+    /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i
+  )
+}
+
+function assertRecoveredDeletes (serverRoot, targets) {
+  for (const { worldId, storagePaths } of targets) {
+    assert.equal(
+      fs.existsSync(path.join(serverRoot, 'plugins', 'WorldManagement', 'worlds', `${worldId}.yml`)),
+      false,
+      `Startup recovery left ${worldId} metadata behind.`
+    )
+    assert.equal(
+      storagePaths.some(candidate => fs.existsSync(candidate)),
+      false,
+      `Startup recovery left ${worldId} storage behind.`
+    )
+  }
+  assert.equal(
+    findDirectories(serverRoot, '.worldmanagement-quarantine').some(directory =>
+      fs.readdirSync(directory).length > 0
+    ),
+    false,
+    'Startup recovery left a quarantine claim behind.'
+  )
 }
 
 async function command (paper, logPath, input, expected, commandPath, creditCoverage = true) {
   assertCommandMatchesPath(input, commandPath)
   const start = normalizedLog(logPath).length
   paper.stdin.write(`${input}\n`)
-  await waitForLog(logPath, expected, 30000, input, start)
+  await waitForLog(logPath, expected, 30000, input, start, paper)
   passedCommands++
   if (creditCoverage) coveredPaths.add(commandPath)
 }
@@ -300,7 +468,7 @@ async function command (paper, logPath, input, expected, commandPath, creditCove
 async function feedback (paper, logPath, input, expected) {
   const start = normalizedLog(logPath).length
   paper.stdin.write(`${input}\n`)
-  await waitForLog(logPath, expected, 30000, input, start)
+  await waitForLog(logPath, expected, 30000, input, start, paper)
   passedCommands++
 }
 
@@ -383,7 +551,7 @@ function readMetadata (serverRoot, worldId) {
   const metadataFile = path.join(serverRoot, 'plugins', 'WorldManagement', 'worlds', `${worldId}.yml`)
   assert.ok(fs.existsSync(metadataFile), `Expected metadata file: ${metadataFile}`)
   const metadata = YAML.parse(fs.readFileSync(metadataFile, 'utf8'))
-  assert.equal(metadata['schema-version'], 2, `${worldId} must use schema 2 metadata.`)
+  assert.equal(metadata['schema-version'], 4, `${worldId} must use schema 4 metadata.`)
   return metadata
 }
 
@@ -415,10 +583,13 @@ async function waitForCondition (condition, timeoutMilliseconds, label) {
   throw new Error(`Timed out waiting for ${label}.`)
 }
 
-async function waitForLog (logPath, expected, timeoutMilliseconds, label, start = 0) {
+async function waitForLog (logPath, expected, timeoutMilliseconds, label, start = 0, paper) {
   const deadline = Date.now() + timeoutMilliseconds
   while (Date.now() < deadline) {
     if (fs.existsSync(logPath) && normalizedLog(logPath).slice(start).includes(expected)) return
+    if (paper && processExited(paper)) {
+      throw new Error(`Paper exited before ${label}: ${expected}`)
+    }
     await new Promise(resolve => setTimeout(resolve, 50))
   }
   throw new Error(`Timed out waiting for ${label}: ${expected}`)
@@ -426,16 +597,6 @@ async function waitForLog (logPath, expected, timeoutMilliseconds, label, start 
 
 function normalizedLog (logPath) {
   return fs.readFileSync(logPath, 'utf8').replace(/\u001B\[[\d;]*[^\d;]/g, '')
-}
-
-function waitForExit (paper, timeoutMilliseconds) {
-  return new Promise((resolve, reject) => {
-    const timer = setTimeout(() => reject(new Error('Timed out waiting for Paper shutdown.')), timeoutMilliseconds)
-    paper.once('exit', () => {
-      clearTimeout(timer)
-      resolve()
-    })
-  })
 }
 
 function findDirectories (root, name) {

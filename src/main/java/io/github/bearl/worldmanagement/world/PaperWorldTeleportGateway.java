@@ -6,7 +6,6 @@ import java.util.Optional;
 import java.util.UUID;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ConcurrentHashMap;
-import java.util.concurrent.atomic.AtomicBoolean;
 import org.bukkit.Bukkit;
 import org.bukkit.Location;
 import org.bukkit.NamespacedKey;
@@ -17,11 +16,21 @@ import org.bukkit.entity.Player;
 public final class PaperWorldTeleportGateway implements WorldTeleportGateway {
 
     private final WorldThreadDispatcher dispatcher;
-    private final java.util.Set<CompletableFuture<Boolean>> pendingTeleports = ConcurrentHashMap.newKeySet();
-    private final AtomicBoolean acceptingOperations = new AtomicBoolean(true);
+    private final RuntimeResolver runtimeResolver;
+    private final Object admissionLock = new Object();
+    private final java.util.Set<PendingTeleport> pendingTeleports = ConcurrentHashMap.newKeySet();
+    private boolean acceptingOperations = true;
 
     public PaperWorldTeleportGateway(final WorldThreadDispatcher dispatcher) {
+        this(dispatcher, new BukkitRuntimeResolver());
+    }
+
+    PaperWorldTeleportGateway(
+        final WorldThreadDispatcher dispatcher,
+        final RuntimeResolver runtimeResolver
+    ) {
         this.dispatcher = Objects.requireNonNull(dispatcher, "dispatcher");
+        this.runtimeResolver = Objects.requireNonNull(runtimeResolver, "runtimeResolver");
     }
 
     @Override
@@ -33,51 +42,166 @@ public final class PaperWorldTeleportGateway implements WorldTeleportGateway {
         final UUID requiredPlayerId = Objects.requireNonNull(playerId, "playerId");
         final VerifiedWorldRef requiredTarget = Objects.requireNonNull(target, "target");
         final Optional<WorldCoordinates> requiredCoordinates = Objects.requireNonNull(coordinates, "coordinates");
-        final CompletableFuture<Boolean> result = new CompletableFuture<>();
-        if (!acceptingOperations.get()) {
-            result.complete(false);
-            return result;
+        final PendingTeleport operation = new PendingTeleport();
+        synchronized (admissionLock) {
+            if (!acceptingOperations) {
+                operation.rejectBeforeSubmission();
+                return operation.result();
+            }
+            pendingTeleports.add(operation);
+            operation.drain().whenComplete((unused, failure) -> pendingTeleports.remove(operation));
         }
-        pendingTeleports.add(result);
-        result.whenComplete((unused, failure) -> pendingTeleports.remove(result));
-        if (!acceptingOperations.get()) {
-            result.complete(false);
-            return result;
+        try {
+            dispatcher.executeGlobal(() -> {
+                try {
+                    final NamespacedKey key = NamespacedKey.fromString(requiredTarget.paperKey());
+                    final World world = key == null ? null : runtimeResolver.world(key);
+                    final Player player = runtimeResolver.player(requiredPlayerId);
+                    if (world == null || player == null || !world.getUID().equals(requiredTarget.worldUuid())) {
+                        completeBeforeSubmission(operation, false);
+                        return;
+                    }
+                    final Location destination = requiredCoordinates
+                        .map(value -> new Location(world, value.x(), value.y(), value.z()))
+                        .orElseGet(world::getSpawnLocation);
+                    if (!accepting()) {
+                        completeBeforeSubmission(operation, false);
+                        return;
+                    }
+                    final boolean scheduled = dispatcher.executeFor(
+                        player,
+                        () -> submitPaperTeleport(operation, player, destination),
+                        () -> completeBeforeSubmission(operation, false)
+                    );
+                    if (!scheduled) {
+                        completeBeforeSubmission(operation, false);
+                    }
+                } catch (final RuntimeException failure) {
+                    completeBeforeSubmission(operation, false);
+                }
+            }, () -> completeBeforeSubmission(operation, false));
+        } catch (final RuntimeException failure) {
+            completeBeforeSubmission(operation, false);
         }
-        dispatcher.executeGlobal(() -> {
-            if (!acceptingOperations.get()) {
-                result.complete(false);
-                return;
-            }
-            final NamespacedKey key = NamespacedKey.fromString(requiredTarget.paperKey());
-            final World world = key == null ? null : Bukkit.getWorld(key);
-            final Player player = Bukkit.getPlayer(requiredPlayerId);
-            if (world == null || player == null || !world.getUID().equals(requiredTarget.worldUuid())) {
-                result.complete(false);
-                return;
-            }
-            final Location destination = requiredCoordinates
-                .map(value -> new Location(world, value.x(), value.y(), value.z()))
-                .orElseGet(world::getSpawnLocation);
-            final boolean scheduled = dispatcher.executeFor(
-                player,
-                () -> player.teleportAsync(destination).whenComplete((teleported, failure) ->
-                    result.complete(failure == null && teleported)
-                ),
-                () -> result.complete(false)
-            );
-            if (!scheduled) {
-                result.complete(false);
-            }
-        }, () -> result.complete(false));
-        return result;
+        return operation.result();
     }
 
     @Override
     public CompletableFuture<Void> beginShutdown() {
-        acceptingOperations.set(false);
-        final CompletableFuture<?>[] pending = pendingTeleports.toArray(CompletableFuture[]::new);
-        pendingTeleports.forEach(teleport -> teleport.complete(false));
-        return CompletableFuture.allOf(pending);
+        final PendingTeleport[] pending;
+        synchronized (admissionLock) {
+            acceptingOperations = false;
+            pending = pendingTeleports.toArray(PendingTeleport[]::new);
+            for (final PendingTeleport operation : pending) {
+                operation.rejectForShutdown();
+            }
+        }
+        return CompletableFuture.allOf(java.util.Arrays.stream(pending)
+            .map(PendingTeleport::drain)
+            .toArray(CompletableFuture[]::new));
+    }
+
+    private boolean accepting() {
+        synchronized (admissionLock) {
+            return acceptingOperations;
+        }
+    }
+
+    private void submitPaperTeleport(
+        final PendingTeleport operation,
+        final Player player,
+        final Location destination
+    ) {
+        synchronized (admissionLock) {
+            if (!acceptingOperations) {
+                operation.rejectBeforeSubmission();
+                return;
+            }
+            try {
+                final CompletableFuture<Boolean> paperTeleport = Objects.requireNonNull(
+                    player.teleportAsync(destination), "Paper teleport future"
+                );
+                operation.markSubmitted();
+                paperTeleport.whenComplete((teleported, failure) ->
+                    completeSubmitted(operation, failure == null && Boolean.TRUE.equals(teleported))
+                );
+            } catch (final RuntimeException failure) {
+                operation.rejectBeforeSubmission();
+            }
+        }
+    }
+
+    private void completeBeforeSubmission(final PendingTeleport operation, final boolean result) {
+        synchronized (admissionLock) {
+            operation.completeBeforeSubmission(result);
+        }
+    }
+
+    private void completeSubmitted(final PendingTeleport operation, final boolean result) {
+        synchronized (admissionLock) {
+            operation.completeSubmitted(result);
+        }
+    }
+
+    interface RuntimeResolver {
+        World world(NamespacedKey key);
+        Player player(UUID playerId);
+    }
+
+    private static final class BukkitRuntimeResolver implements RuntimeResolver {
+        @Override
+        public World world(final NamespacedKey key) {
+            return Bukkit.getWorld(key);
+        }
+
+        @Override
+        public Player player(final UUID playerId) {
+            return Bukkit.getPlayer(playerId);
+        }
+    }
+
+    private static final class PendingTeleport {
+        private final CompletableFuture<Boolean> result = new CompletableFuture<>();
+        private final CompletableFuture<Void> drain = new CompletableFuture<>();
+        private boolean submitted;
+
+        private CompletableFuture<Boolean> result() {
+            return result;
+        }
+
+        private CompletableFuture<Void> drain() {
+            return drain;
+        }
+
+        private void markSubmitted() {
+            submitted = true;
+        }
+
+        private void rejectForShutdown() {
+            result.complete(false);
+            if (!submitted) {
+                drain.complete(null);
+            }
+        }
+
+        private void rejectBeforeSubmission() {
+            completeBeforeSubmission(false);
+        }
+
+        private void completeBeforeSubmission(final boolean value) {
+            if (submitted) {
+                return;
+            }
+            result.complete(value);
+            drain.complete(null);
+        }
+
+        private void completeSubmitted(final boolean value) {
+            if (!submitted) {
+                return;
+            }
+            result.complete(value);
+            drain.complete(null);
+        }
     }
 }

@@ -58,6 +58,7 @@ final class WorldLifecycleListenerTest {
 
         assertEquals(0, reconciliations.get());
         assertTrue(catalog.findUniqueByWorldId("creative").isEmpty());
+        assertEquals(0, catalog.retainedObservationCount());
     }
 
     @Test
@@ -96,6 +97,7 @@ final class WorldLifecycleListenerTest {
         final WorldLifecycleListener listener = listener(metadata, catalog, dispatcher, reconciliations);
 
         listener.onWorldLoad(new WorldLoadEvent(paperWorld(creative)));
+        executor.submit(() -> null).join();
         dispatcher.runAll();
 
         assertEquals(1, reconciliations.get());
@@ -173,6 +175,69 @@ final class WorldLifecycleListenerTest {
             io.github.bearl.worldmanagement.world.IdentityVerificationState.CONFLICT,
             metadata.metadataWorld("creative").orElseThrow().identityState()
         );
+    }
+
+    @Test
+    void deletingWorldLoadSchedulesExistingPlayerIsolationWithoutMutatingTombstone() {
+        final WorldRuntimeGateway.LifecycleWorld creative = lifecycleWorld(
+            "minecraft:creative", "11111111-1111-1111-1111-111111111111"
+        );
+        final WorldManagementService metadata = metadata(creative);
+        final io.github.bearl.worldmanagement.world.WorldMetadata current =
+            metadata.managedWorld("creative").orElseThrow();
+        metadata.markDeleting(new io.github.bearl.worldmanagement.world.WorldDeletionClaim(
+            io.github.bearl.worldmanagement.world.VerifiedWorldRef.from(current).orElseThrow(),
+            current.version(),
+            UUID.fromString("66666666-6666-4666-8666-666666666666"),
+            io.github.bearl.worldmanagement.world.WorldManagementState.ACTIVE
+        ), null).join();
+        final LoadedWorldCatalog catalog = new LoadedWorldCatalog();
+        final RecordingDispatcher dispatcher = new RecordingDispatcher();
+        final AtomicInteger isolations = new AtomicInteger();
+        final WorldLifecycleListener listener = new WorldLifecycleListener(
+            metadata,
+            ignored -> { },
+            ignored -> CompletableFuture.completedFuture(null),
+            (observation, observed) -> CompletableFuture.completedFuture(null),
+            (world, observed) -> isolations.incrementAndGet(),
+            dispatcher,
+            catalog
+        );
+
+        listener.onWorldLoad(new WorldLoadEvent(paperWorld(creative)));
+        dispatcher.runAll();
+
+        assertEquals(1, isolations.get());
+        final io.github.bearl.worldmanagement.world.WorldMetadata tombstone =
+            metadata.metadataWorld("creative").orElseThrow();
+        assertEquals(io.github.bearl.worldmanagement.world.WorldManagementState.DELETING, tombstone.managementState());
+        assertEquals(current.version() + 1L, tombstone.version());
+    }
+
+    @Test
+    void classificationRejectionStillSchedulesFailClosedIsolation() {
+        final WorldRuntimeGateway.LifecycleWorld creative = lifecycleWorld(
+            "minecraft:creative", "11111111-1111-1111-1111-111111111111"
+        );
+        final WorldManagementService metadata = metadata(creative);
+        final LoadedWorldCatalog catalog = new LoadedWorldCatalog();
+        final RecordingDispatcher dispatcher = new RecordingDispatcher();
+        final AtomicInteger isolations = new AtomicInteger();
+        final WorldLifecycleListener listener = new WorldLifecycleListener(
+            metadata,
+            ignored -> { },
+            ignored -> CompletableFuture.completedFuture(null),
+            (observation, observed) -> CompletableFuture.completedFuture(null),
+            (world, observed) -> isolations.incrementAndGet(),
+            dispatcher,
+            catalog
+        );
+        executor.beginShutdown();
+
+        listener.onWorldLoad(new WorldLoadEvent(paperWorld(creative)));
+        dispatcher.runAll();
+
+        assertEquals(1, isolations.get());
     }
 
     @Test

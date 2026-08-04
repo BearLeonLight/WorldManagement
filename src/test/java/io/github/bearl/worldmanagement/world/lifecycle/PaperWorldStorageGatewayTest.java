@@ -60,6 +60,61 @@ final class PaperWorldStorageGatewayTest {
     }
 
     @Test
+    void rejectsImportClaimWhenItsStorageEntryWasReplaced() throws Exception {
+        final Path legacy = Files.createDirectories(temporaryDirectory.resolve("archive"));
+        Files.writeString(legacy.resolve("level.dat"), "original");
+        final PaperWorldStorageGateway gateway = gateway();
+        final WorldStorageGateway.ImportClaim claim = gateway.prepareImport("archive").orElseThrow();
+        final Path moved = legacy.resolveSibling("archive_old");
+        Files.move(legacy, moved);
+        Files.createDirectories(legacy);
+        Files.writeString(legacy.resolve("level.dat"), "replacement");
+
+        assertThrows(
+            io.github.bearl.worldmanagement.storage.StorageException.class,
+            () -> gateway.validateImportClaim(claim)
+        );
+        assertEquals("replacement", Files.readString(legacy.resolve("level.dat")));
+        assertEquals("original", Files.readString(moved.resolve("level.dat")));
+    }
+
+    @Test
+    void deletesOnlyStorageStillOwnedByTheCreatedRuntimeIdentity() throws Exception {
+        final PaperWorldStorageGateway gateway = gateway();
+        final WorldStorageGateway.CreationClaim creation = gateway.prepareCreation("creative").orElseThrow();
+        final Path dimension = createPaperStorage(
+            temporaryDirectory.resolve("dimensions").resolve("minecraft").resolve("creative")
+        );
+        final var world = io.github.bearl.worldmanagement.world.VerifiedWorldRef.from(metadata()).orElseThrow();
+        final WorldStorageGateway.OwnedCreationClaim owned = gateway.bindCreated(creation, world);
+
+        gateway.deleteCreated(owned);
+
+        assertFalse(Files.exists(dimension));
+    }
+
+    @Test
+    void refusesToDeleteCreatedStorageAfterItWasReplaced() throws Exception {
+        final PaperWorldStorageGateway gateway = gateway();
+        final WorldStorageGateway.CreationClaim creation = gateway.prepareCreation("creative").orElseThrow();
+        final Path dimension = createPaperStorage(
+            temporaryDirectory.resolve("dimensions").resolve("minecraft").resolve("creative")
+        );
+        final var world = io.github.bearl.worldmanagement.world.VerifiedWorldRef.from(metadata()).orElseThrow();
+        final WorldStorageGateway.OwnedCreationClaim owned = gateway.bindCreated(creation, world);
+        final Path original = dimension.resolveSibling("creative_original");
+        Files.move(dimension, original);
+        createPaperStorage(dimension);
+
+        assertThrows(
+            io.github.bearl.worldmanagement.storage.StorageException.class,
+            () -> gateway.deleteCreated(owned)
+        );
+        assertTrue(Files.isDirectory(dimension));
+        assertTrue(Files.isDirectory(original));
+    }
+
+    @Test
     void refusesMissingOrAmbiguousStorageWithoutCreatingDirectories() throws Exception {
         final PaperWorldStorageGateway gateway = gateway();
         assertTrue(gateway.prepareLoad(metadata()).isEmpty());
@@ -130,16 +185,35 @@ final class PaperWorldStorageGatewayTest {
         );
         Files.writeString(deleting.resolve("level.dat"), "deleting");
         final WorldMetadata active = metadata("deleting_world");
-        gateway().quarantine(active);
-        final WorldMetadata deletingMetadata = active.withManagementState(
-            io.github.bearl.worldmanagement.world.WorldManagementState.DELETING
-        );
+        final WorldStorageGateway.QuarantinedWorld claim = gateway().quarantine(active);
+        final WorldMetadata deletingMetadata = active.withDeleting(claim.transactionId());
 
         final Set<String> completed = gateway().recoverQuarantined(Set.of(deletingMetadata));
 
         assertTrue(completed.contains("deleting_world"));
         assertFalse(Files.exists(deleting));
         assertFalse(Files.exists(deleting.getParent().resolve(".worldmanagement-quarantine")));
+    }
+
+    @Test
+    void failsClosedWhenDeletingTransactionDoesNotMatchQuarantine() throws Exception {
+        final Path deleting = Files.createDirectories(
+            temporaryDirectory.resolve("dimensions").resolve("minecraft").resolve("deleting_world")
+        );
+        Files.writeString(deleting.resolve("level.dat"), "deleting");
+        final PaperWorldStorageGateway gateway = gateway();
+        final WorldMetadata active = metadata("deleting_world");
+        gateway.quarantine(active);
+        final WorldMetadata wrongTransaction = active.withDeleting(
+            UUID.fromString("88888888-8888-8888-8888-888888888888")
+        );
+
+        assertThrows(
+            io.github.bearl.worldmanagement.storage.StorageException.class,
+            () -> gateway.recoverQuarantined(Set.of(wrongTransaction))
+        );
+        assertTrue(Files.isDirectory(deleting.getParent().resolve(".worldmanagement-quarantine")));
+        assertFalse(Files.exists(deleting));
     }
 
     @Test
@@ -157,8 +231,8 @@ final class PaperWorldStorageGatewayTest {
 
         assertThrows(
             io.github.bearl.worldmanagement.storage.StorageException.class,
-            () -> gateway.recoverQuarantined(Set.of(active.withManagementState(
-                io.github.bearl.worldmanagement.world.WorldManagementState.DELETING
+            () -> gateway.recoverQuarantined(Set.of(active.withDeleting(
+                UUID.fromString("99999999-9999-9999-9999-999999999999")
             )))
         );
         assertTrue(Files.isRegularFile(deleting.resolve("level.dat")));

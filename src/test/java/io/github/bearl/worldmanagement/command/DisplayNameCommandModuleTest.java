@@ -48,6 +48,7 @@ final class DisplayNameCommandModuleTest {
                 "display-name", "set", "creative", displayName
             });
             final Component response = sender.message();
+            fixture.auditRecorded.get(2, TimeUnit.SECONDS);
 
             assertEquals(displayName, fixture.service.managedWorld("creative").orElseThrow().displayName());
             assertEquals(
@@ -85,6 +86,7 @@ final class DisplayNameCommandModuleTest {
 
             fixture.module.execute(sender.sender(), new String[] {"display-name", "reset", "creative"});
             sender.message();
+            fixture.auditRecorded.get(2, TimeUnit.SECONDS);
 
             assertEquals("creative", fixture.service.managedWorld("creative").orElseThrow().displayName());
             assertEquals(List.of("world.display-name.reset"),
@@ -92,12 +94,37 @@ final class DisplayNameCommandModuleTest {
         }
     }
 
+    @Test
+    void setsDisplayNameForDetachedWorldWithoutReattachingGovernance() throws Exception {
+        try (Fixture fixture = fixture()) {
+            fixture.service.remove("creative").join();
+            final CapturingSender sender = new CapturingSender();
+
+            fixture.module.execute(sender.sender(), new String[] {
+                "display-name", "set", "creative", "<gold>Detached</gold>"
+            });
+            sender.message();
+            fixture.auditRecorded.get(2, TimeUnit.SECONDS);
+
+            assertEquals(
+                "<gold>Detached</gold>",
+                fixture.service.detachedWorld("creative").orElseThrow().displayName()
+            );
+            assertEquals(List.of("world.display-name.set"),
+                fixture.auditEvents.stream().map(AuditEvent::action).toList());
+        }
+    }
+
     private Fixture fixture() {
         final PluginIoExecutor executor = new PluginIoExecutor("DisplayCommandTest");
         final List<AuditEvent> auditEvents = new CopyOnWriteArrayList<>();
+        final CompletableFuture<AuditEvent> auditRecorded = new CompletableFuture<>();
         final AuditService audit = new AuditService(
             executor,
-            auditEvents::add,
+            event -> {
+                auditEvents.add(event);
+                auditRecorded.complete(event);
+            },
             Logger.getLogger("DisplayCommandTest"),
             AuditPolicy.BEST_EFFORT
         );
@@ -120,6 +147,7 @@ final class DisplayNameCommandModuleTest {
             executor,
             service,
             auditEvents,
+            auditRecorded,
             new DisplayNameCommandModule(
                 service,
                 new WorldNameValidator(),
@@ -149,6 +177,7 @@ final class DisplayNameCommandModuleTest {
         PluginIoExecutor executor,
         WorldManagementService service,
         List<AuditEvent> auditEvents,
+        CompletableFuture<AuditEvent> auditRecorded,
         DisplayNameCommandModule module
     ) implements AutoCloseable {
         @Override

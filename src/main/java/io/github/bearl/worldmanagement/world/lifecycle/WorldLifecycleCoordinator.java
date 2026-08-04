@@ -6,10 +6,12 @@ import io.github.bearl.worldmanagement.core.DiagnosticLogger;
 import io.github.bearl.worldmanagement.config.DebugArea;
 import io.github.bearl.worldmanagement.core.WorldThreadDispatcher;
 import io.github.bearl.worldmanagement.core.WorldNameValidator;
+import io.github.bearl.worldmanagement.world.WorldDeletionClaim;
 import io.github.bearl.worldmanagement.world.WorldManagementService;
 import io.github.bearl.worldmanagement.world.WorldLoadState;
 import io.github.bearl.worldmanagement.world.WorldManagementState;
 import io.github.bearl.worldmanagement.world.WorldMetadata;
+import io.github.bearl.worldmanagement.world.WorldRegistrationSource;
 import io.github.bearl.worldmanagement.world.VerifiedWorldRef;
 import io.github.bearl.worldmanagement.world.RequestedWorldType;
 import java.time.Duration;
@@ -36,9 +38,9 @@ public final class WorldLifecycleCoordinator {
     private final WorldThreadDispatcher threadDispatcher;
     private final Optional<String> fallbackWorld;
     private final Map<String, WorldOperationState> activeOperations = new ConcurrentHashMap<>();
+    private final Map<String, Long> deleteLoadGenerations = new ConcurrentHashMap<>();
     private final Object operationLock = new Object();
     private final Set<CompletableFuture<?>> pendingOperations = new HashSet<>();
-    private final Set<VerifiedWorldRef> worldsLoadedDuringDelete = ConcurrentHashMap.newKeySet();
     private boolean acceptingOperations = true;
     private final WorldNameValidator worldNameValidator = new WorldNameValidator();
     private final DiagnosticLogger diagnostics;
@@ -115,50 +117,80 @@ public final class WorldLifecycleCoordinator {
         final String worldName = requiredRequest.worldName();
         return withOperation(worldName, WorldOperationState.CREATING, CreateResult.operationInProgress(), () -> continueOnGlobal(() -> {
             if (gateway.findWorldByPaperKey("minecraft:" + worldName).isPresent()
-                || metadataService.managedWorld(worldName).isPresent()) {
+                || metadataService.metadataWorld(worldName).isPresent()) {
                 return CompletableFuture.completedFuture(CreateResult.alreadyExists());
             }
             return ioExecutor.submit(() -> storageGateway.prepareCreation(worldName))
                 .thenCompose(creationClaim -> continueOnNonTickingGlobal(() -> {
                     if (creationClaim.isEmpty()
                         || gateway.findWorldByPaperKey("minecraft:" + worldName).isPresent()
-                        || metadataService.managedWorld(worldName).isPresent()) {
+                        || metadataService.metadataWorld(worldName).isPresent()) {
                         return CompletableFuture.completedFuture(CreateResult.alreadyExists());
                     }
                     final WorldRuntimeGateway.LifecycleWorld world;
                     try {
                         world = gateway.create(requiredRequest);
                     } catch (final RuntimeException failure) {
-                        return compensateFailedCreate(null, creationClaim.orElseThrow(), failure);
+                        return CompletableFuture.failedFuture(failure);
                     }
                     if (world == null) {
-                        return compensateUnpersistedCreate(
-                            null, creationClaim.orElseThrow(), CreateResult.failed()
-                        );
+                        return CompletableFuture.completedFuture(CreateResult.failed());
                     }
-                    return metadataService.adopt(
-                        world.identity(), world.lifecycleCapability(),
-                        Optional.of(RequestedWorldType.valueOf(requiredRequest.type().name())),
-                        requiredRequest.generator(),
-                        defaultRankSystemEnabled, event
-                    )
+                    final CompletableFuture<WorldStorageGateway.OwnedCreationClaim> ownership =
+                        ioExecutor.submit(() -> storageGateway.bindCreated(
+                            creationClaim.orElseThrow(), world.reference()
+                        )).exceptionallyCompose(failure -> compensateUnownedCreate(world, failure));
+                    return ownership.thenCompose(ownedCreation -> metadataService.adopt(
+                            world.identity(), world.lifecycleCapability(),
+                            Optional.of(RequestedWorldType.valueOf(requiredRequest.type().name())),
+                            requiredRequest.generator(),
+                            defaultRankSystemEnabled,
+                            requiredRequest.detached() ? WorldManagementState.DETACHED : WorldManagementState.ACTIVE,
+                            event
+                        )
                         .thenCompose(adoption -> switch (adoption.status()) {
                             case ADOPTED -> revalidatePersistedRuntimeIdentity(world)
                                 .thenApply(verified -> verified ? CreateResult.created() : CreateResult.failed());
                             case ALREADY_MANAGED -> CompletableFuture.completedFuture(CreateResult.alreadyExists());
+                            case IDENTITY_CONFLICT -> compensateUnpersistedCreate(
+                                world, ownedCreation, CreateResult.failed()
+                            );
                             case NOT_READY -> compensateUnpersistedCreate(
-                                world, creationClaim.orElseThrow(), CreateResult.notReady()
+                                world, ownedCreation, CreateResult.notReady()
                             );
                         })
                         .exceptionallyCompose(failure -> compensateFailedCreate(
-                            world, creationClaim.orElseThrow(), failure
-                        ));
+                            world, ownedCreation, failure
+                        ))
+                    );
                 }));
                 }));
     }
 
+    private CompletableFuture<WorldStorageGateway.OwnedCreationClaim> compensateUnownedCreate(
+        final WorldRuntimeGateway.LifecycleWorld world,
+        final Throwable failure
+    ) {
+        return continueOnNonTickingGlobal(() -> {
+            if (!gateway.unload(world, false)) {
+                failure.addSuppressed(new IllegalStateException(
+                    "Could not unload created world after storage ownership could not be proven: " + world.name()
+                ));
+            }
+            return CompletableFuture.failedFuture(failure);
+        });
+    }
+
     public CompletableFuture<AdoptResult> adoptLoadedWorld(
         final String worldName,
+        final AuditEvent event
+    ) {
+        return adoptLoadedWorld(worldName, false, event);
+    }
+
+    public CompletableFuture<AdoptResult> adoptLoadedWorld(
+        final String worldName,
+        final boolean detached,
         final AuditEvent event
     ) {
         return withOperation(
@@ -176,11 +208,13 @@ public final class WorldLifecycleCoordinator {
                 }
                 return metadataService.adopt(
                     observed.identity(), observed.lifecycleCapability(), Optional.empty(),
-                    defaultRankSystemEnabled, event
+                    Optional.empty(), defaultRankSystemEnabled,
+                    detached ? WorldManagementState.DETACHED : WorldManagementState.ACTIVE, event
                 ).thenCompose(adoption -> switch (adoption.status()) {
                     case ADOPTED -> revalidatePersistedRuntimeIdentity(observed)
                         .thenApply(verified -> verified ? AdoptResult.adopted() : AdoptResult.failed());
                     case ALREADY_MANAGED -> CompletableFuture.completedFuture(AdoptResult.alreadyManaged());
+                    case IDENTITY_CONFLICT -> CompletableFuture.completedFuture(AdoptResult.failed());
                     case NOT_READY -> CompletableFuture.completedFuture(AdoptResult.notReady());
                 });
             })
@@ -189,7 +223,7 @@ public final class WorldLifecycleCoordinator {
 
     private CompletableFuture<CreateResult> compensateFailedCreate(
         final WorldRuntimeGateway.LifecycleWorld world,
-        final WorldStorageGateway.CreationClaim creationClaim,
+        final WorldStorageGateway.OwnedCreationClaim creationClaim,
         final Throwable failure
     ) {
         return continueOnNonTickingGlobal(() -> {
@@ -214,7 +248,7 @@ public final class WorldLifecycleCoordinator {
 
     private CompletableFuture<CreateResult> compensateUnpersistedCreate(
         final WorldRuntimeGateway.LifecycleWorld world,
-        final WorldStorageGateway.CreationClaim creationClaim,
+        final WorldStorageGateway.OwnedCreationClaim creationClaim,
         final CreateResult result
     ) {
         return continueOnNonTickingGlobal(() -> {
@@ -240,12 +274,6 @@ public final class WorldLifecycleCoordinator {
             if (metadata.isEmpty() || metadata.get().managementState() != WorldManagementState.ACTIVE) {
                 return CompletableFuture.completedFuture(RemoveResult.notManaged());
             }
-            final VerifiedWorldRef expected = VerifiedWorldRef.from(metadata.orElseThrow()).orElse(null);
-            if (metadata.get().desiredState() != WorldLoadState.UNLOADED
-                || expected == null
-                || gateway.findWorld(expected).isPresent()) {
-                return CompletableFuture.completedFuture(RemoveResult.notUnloaded());
-            }
             return metadataService.remove(worldName, event).thenApply(removal -> switch (removal.status()) {
                 case DETACHED, ALREADY_DETACHED -> RemoveResult.detached();
                 case NOT_MANAGED -> RemoveResult.notManaged();
@@ -255,25 +283,94 @@ public final class WorldLifecycleCoordinator {
         });
     }
 
+    public CompletableFuture<ManageResult> manage(final String worldName, final AuditEvent event) {
+        return withOperation(worldName, WorldOperationState.MANAGING, ManageResult.operationInProgress(), () ->
+            continueOnGlobal(() -> {
+                final WorldMetadata metadata = metadataService.detachedWorld(worldName).orElse(null);
+                if (metadata == null) {
+                    return CompletableFuture.completedFuture(ManageResult.notDetached());
+                }
+                final VerifiedWorldRef expected = VerifiedWorldRef.from(metadata).orElse(null);
+                if (expected == null) {
+                    return CompletableFuture.completedFuture(ManageResult.identityMismatch());
+                }
+                final WorldRuntimeGateway.LifecycleWorld observed = gateway.findLoadedWorldById(worldName)
+                    .orElse(null);
+                if (observed != null && !expected.equals(observed.reference())) {
+                    return CompletableFuture.completedFuture(ManageResult.identityMismatch());
+                }
+                final WorldLoadState observedState = observed == null
+                    ? WorldLoadState.UNLOADED : WorldLoadState.LOADED;
+                return metadataService.manage(worldName, observedState, event)
+                    .thenApply(update -> switch (update.status()) {
+                        case UPDATED -> ManageResult.managed();
+                        case NOT_MANAGED -> ManageResult.notDetached();
+                        case NOT_READY -> ManageResult.notReady();
+                    });
+            })
+        );
+    }
+
+    public CompletableFuture<RemoveResult> purgeDetached(final String worldName, final AuditEvent event) {
+        return withOperation(worldName, WorldOperationState.PURGING, RemoveResult.operationInProgress(), () ->
+            metadataService.purgeDetached(worldName, event).thenApply(removal -> switch (removal.status()) {
+                case PURGED -> RemoveResult.purged();
+                case NOT_READY -> RemoveResult.notReady();
+                case DETACHED, ALREADY_DETACHED, NOT_MANAGED -> RemoveResult.notManaged();
+            })
+        );
+    }
+
     public CompletableFuture<LifecycleResult> loadAsync(final String worldName) {
         return loadAsync(worldName, null);
     }
 
     public CompletableFuture<LifecycleResult> loadAsync(final String worldName, final AuditEvent event) {
         return withOperation(worldName, WorldOperationState.LOADING, LifecycleResult.operationInProgress(), () -> {
-            final var metadata = metadataService.managedWorld(worldName);
+            final var metadata = lifecyclableWorld(worldName);
             if (metadata.isEmpty()) {
                 return CompletableFuture.completedFuture(LifecycleResult.notManaged());
             }
             if (!metadata.orElseThrow().lifecycleCapability().permitsManagedLifecycle()) {
                 return CompletableFuture.completedFuture(LifecycleResult.externalOnly());
             }
-            return ioExecutor.submit(() -> storageGateway.prepareLoad(metadata.orElseThrow())).thenCompose(loadClaim -> {
+            final WorldMetadata expectedMetadata = metadata.orElseThrow();
+            final VerifiedWorldRef expected = VerifiedWorldRef.from(expectedMetadata).orElse(null);
+            if (expected == null) {
+                return CompletableFuture.completedFuture(LifecycleResult.failed());
+            }
+            return continueOnGlobal(() -> {
+                final WorldRuntimeGateway.LifecycleWorld observed = gateway.findWorldByPaperKey(expected.paperKey())
+                    .orElse(null);
+                if (observed == null) {
+                    return loadUnloadedWorld(worldName, expectedMetadata, event);
+                }
+                if (!expected.equals(observed.reference())) {
+                    return metadataService.classifyLoadedIdentity(
+                        observed.identity(), observed.lifecycleCapability()
+                    ).thenApply(unused -> LifecycleResult.failed());
+                }
+                return metadataService.ensureDesiredState(worldName, WorldLoadState.LOADED, event)
+                    .thenApply(update -> switch (update.status()) {
+                        case UPDATED -> LifecycleResult.alreadyLoaded();
+                        case NOT_MANAGED -> LifecycleResult.notManaged();
+                        case NOT_READY -> LifecycleResult.notReady();
+                    });
+            });
+        });
+    }
+
+    private CompletableFuture<LifecycleResult> loadUnloadedWorld(
+        final String worldName,
+        final WorldMetadata expectedMetadata,
+        final AuditEvent event
+    ) {
+        return ioExecutor.submit(() -> storageGateway.prepareLoad(expectedMetadata)).thenCompose(loadClaim -> {
                 if (loadClaim.isEmpty()) {
                     return CompletableFuture.completedFuture(LifecycleResult.storageNotFound());
                 }
                 final WorldStorageGateway.LoadClaim claim = loadClaim.orElseThrow();
-                final var current = metadataService.managedWorld(worldName);
+                final var current = lifecyclableWorld(worldName);
                 if (current.isEmpty()
                     || current.get().version() != claim.metadataVersion()
                     || !current.get().identity().paperKey().equals(claim.world().paperKey())
@@ -291,7 +388,7 @@ public final class WorldLifecycleCoordinator {
                                 return CompletableFuture.completedFuture(LifecycleResult.failed());
                             }
                             final WorldRuntimeGateway.LifecycleWorld observed = loadResult.world().orElseThrow();
-                            return metadataService.classifyLoadedIdentity(
+                            return metadataService.classifyLifecycleIdentity(
                                 observed.identity(), observed.lifecycleCapability()
                             ).thenCompose(classification -> {
                                 final boolean verified = classification.status()
@@ -314,7 +411,6 @@ public final class WorldLifecycleCoordinator {
                                 return compensateRejectedLoad(observed, loadResult.newlyLoaded());
                             });
                     }));
-            });
         });
     }
 
@@ -347,9 +443,12 @@ public final class WorldLifecycleCoordinator {
     ) {
         Objects.requireNonNull(requestedFallback, "requestedFallback");
         return withOperation(worldName, WorldOperationState.UNLOADING, LifecycleResult.operationInProgress(), () -> {
-            final var metadata = metadataService.managedWorld(worldName);
+            final var metadata = lifecyclableWorld(worldName);
             if (metadata.isEmpty()) {
-                return CompletableFuture.completedFuture(LifecycleResult.notManaged());
+                if (metadataService.metadataWorld(worldName).isPresent()) {
+                    return CompletableFuture.completedFuture(LifecycleResult.notManaged());
+                }
+                return unloadUnknownRuntime(worldName, requestedFallback);
             }
             if (!metadata.orElseThrow().lifecycleCapability().permitsManagedLifecycle()) {
                 return CompletableFuture.completedFuture(LifecycleResult.externalOnly());
@@ -374,7 +473,9 @@ public final class WorldLifecycleCoordinator {
                         return CompletableFuture.completedFuture(LifecycleResult.fallbackUnavailable());
                     }
                     return gateway.teleportPlayersToWorld(observed, target)
-                        .thenCompose(teleported -> continueUnloadAfterTeleport(observed, teleported, event));
+                        .thenCompose(teleported -> continueUnloadAfterTeleport(
+                            observed, target, teleported, event
+                        ));
                 }
                 if (!saveAndUnload(observed)) {
                     return CompletableFuture.completedFuture(LifecycleResult.unloadFailed());
@@ -382,6 +483,55 @@ public final class WorldLifecycleCoordinator {
                 return persistUnloadIntent(worldName, event, LifecycleResult.unloaded());
             });
         });
+    }
+
+    private CompletableFuture<LifecycleResult> unloadUnknownRuntime(
+        final String worldName,
+        final Optional<String> requestedFallback
+    ) {
+        return continueOnNonTickingGlobal(() -> {
+            final WorldRuntimeGateway.LifecycleWorld observed = gateway.findLoadedWorldById(worldName)
+                .orElse(null);
+            if (observed == null) {
+                return CompletableFuture.completedFuture(LifecycleResult.notManaged());
+            }
+            if (gateway.playerCount(observed) > 0) {
+                final WorldRuntimeGateway.LifecycleWorld target = resolveFallback(
+                    observed, requestedFallback
+                ).orElse(null);
+                if (target == null) {
+                    return CompletableFuture.completedFuture(LifecycleResult.fallbackUnavailable());
+                }
+                return gateway.teleportPlayersToWorld(observed, target)
+                    .thenCompose(teleported -> continueUnknownUnloadAfterTeleport(
+                        observed, target, teleported
+                    ));
+            }
+            return CompletableFuture.completedFuture(
+                saveAndUnload(observed) ? LifecycleResult.unloaded() : LifecycleResult.unloadFailed()
+            );
+        });
+    }
+
+    private CompletableFuture<LifecycleResult> continueUnknownUnloadAfterTeleport(
+        final WorldRuntimeGateway.LifecycleWorld source,
+        final WorldRuntimeGateway.LifecycleWorld target,
+        final boolean teleported
+    ) {
+        return continueOnNonTickingGlobal(() -> {
+            final WorldRuntimeGateway.LifecycleWorld observed = gateway.findLoadedWorldById(source.name())
+                .filter(candidate -> candidate.reference().equals(source.reference()))
+                .orElse(null);
+            if (!isPinnedRuntimeWorldLoaded(target)) {
+                return CompletableFuture.completedFuture(LifecycleResult.fallbackUnavailable());
+            }
+            if (observed == null || !teleported || gateway.playerCount(observed) > 0) {
+                return CompletableFuture.completedFuture(LifecycleResult.playersPresent());
+            }
+            return CompletableFuture.completedFuture(
+                saveAndUnload(observed) ? LifecycleResult.unloaded() : LifecycleResult.unloadFailed()
+            );
+        }, () -> CompletableFuture.completedFuture(LifecycleResult.playersPresent()));
     }
 
     private CompletableFuture<LifecycleResult> persistUnloadIntent(
@@ -408,6 +558,7 @@ public final class WorldLifecycleCoordinator {
 
     private CompletableFuture<LifecycleResult> continueUnloadAfterTeleport(
         final WorldRuntimeGateway.LifecycleWorld source,
+        final WorldRuntimeGateway.LifecycleWorld target,
         final boolean teleported,
         final AuditEvent event
     ) {
@@ -415,6 +566,9 @@ public final class WorldLifecycleCoordinator {
             final WorldRuntimeGateway.LifecycleWorld observed = gateway.findWorld(source.reference()).orElse(null);
             if (observed == null || !source.reference().equals(observed.reference())) {
                 return CompletableFuture.completedFuture(LifecycleResult.unloadFailed());
+            }
+            if (!isPinnedRuntimeWorldLoaded(target)) {
+                return CompletableFuture.completedFuture(LifecycleResult.fallbackUnavailable());
             }
             if (!teleported || gateway.playerCount(source) > 0) {
                 return CompletableFuture.completedFuture(LifecycleResult.playersPresent());
@@ -430,7 +584,7 @@ public final class WorldLifecycleCoordinator {
         final String worldName,
         final WorldRuntimeGateway.WorldEnvironment environment
     ) {
-        return importWorld(worldName, environment, null);
+        return importWorld(worldName, environment, false, null);
     }
 
     public CompletableFuture<CreateResult> importWorld(
@@ -438,34 +592,59 @@ public final class WorldLifecycleCoordinator {
         final WorldRuntimeGateway.WorldEnvironment environment,
         final AuditEvent event
     ) {
+        return importWorld(worldName, environment, false, event);
+    }
+
+    public CompletableFuture<CreateResult> importWorld(
+        final String worldName,
+        final WorldRuntimeGateway.WorldEnvironment environment,
+        final boolean detached,
+        final AuditEvent event
+    ) {
         Objects.requireNonNull(environment, "environment");
-        return withOperation(worldName, WorldOperationState.IMPORTING, CreateResult.operationInProgress(), () -> continueOnNonTickingGlobal(() -> {
-            if (gateway.findWorldByPaperKey("minecraft:" + worldName).isPresent()
-                || metadataService.managedWorld(worldName).isPresent()) {
+        return withOperation(worldName, WorldOperationState.IMPORTING, CreateResult.operationInProgress(), () -> {
+            if (metadataService.metadataWorld(worldName).isPresent()) {
                 return CompletableFuture.completedFuture(CreateResult.alreadyExists());
             }
-            final WorldRuntimeGateway.LoadResult loadResult;
-            try {
-                loadResult = gateway.loadUnmanaged(worldName, environment);
-            } catch (final RuntimeException failure) {
-                return CompletableFuture.failedFuture(failure);
-            }
-            if (loadResult.world().isEmpty()) {
-                return CompletableFuture.completedFuture(CreateResult.failed());
-            }
-            final WorldRuntimeGateway.LifecycleWorld world = loadResult.world().orElseThrow();
-            return metadataService.adopt(
-                world.identity(), world.lifecycleCapability(), Optional.empty(),
-                defaultRankSystemEnabled, event
-            )
-                .thenCompose(adoption -> switch (adoption.status()) {
-                    case ADOPTED -> revalidatePersistedRuntimeIdentity(world)
-                        .thenApply(verified -> verified ? CreateResult.created() : CreateResult.failed());
-                    case ALREADY_MANAGED -> CompletableFuture.completedFuture(CreateResult.alreadyExists());
-                    case NOT_READY -> unloadUnpersistedImport(world, CreateResult.notReady());
-                })
-                .exceptionallyCompose(failure -> unloadAfterMetadataFailure(world, failure));
-            }));
+            return ioExecutor.submit(() -> storageGateway.prepareImport(worldName)).thenCompose(importClaim -> {
+                if (importClaim.isEmpty()) {
+                    return CompletableFuture.completedFuture(CreateResult.failed());
+                }
+                final WorldStorageGateway.ImportClaim claim = importClaim.orElseThrow();
+                return ioExecutor.execute(() -> storageGateway.validateImportClaim(claim))
+                    .thenCompose(unused -> continueOnNonTickingGlobal(() -> {
+                        if (gateway.findWorldByPaperKey("minecraft:" + worldName).isPresent()
+                            || metadataService.metadataWorld(worldName).isPresent()) {
+                            return CompletableFuture.completedFuture(CreateResult.alreadyExists());
+                        }
+                        final WorldRuntimeGateway.LoadResult loadResult;
+                        try {
+                            loadResult = gateway.loadUnmanaged(worldName, environment);
+                        } catch (final RuntimeException failure) {
+                            return CompletableFuture.failedFuture(failure);
+                        }
+                        if (loadResult.world().isEmpty()) {
+                            return CompletableFuture.completedFuture(CreateResult.failed());
+                        }
+                        final WorldRuntimeGateway.LifecycleWorld world = loadResult.world().orElseThrow();
+                        return metadataService.adopt(
+                            world.identity(), world.lifecycleCapability(), Optional.empty(),
+                            Optional.empty(), defaultRankSystemEnabled,
+                            detached ? WorldManagementState.DETACHED : WorldManagementState.ACTIVE, event
+                        )
+                            .thenCompose(adoption -> switch (adoption.status()) {
+                                case ADOPTED -> revalidatePersistedRuntimeIdentity(world)
+                                    .thenApply(verified -> verified ? CreateResult.created() : CreateResult.failed());
+                                case ALREADY_MANAGED -> CompletableFuture.completedFuture(CreateResult.alreadyExists());
+                                case IDENTITY_CONFLICT -> unloadUnpersistedImport(
+                                    world, CreateResult.failed()
+                                );
+                                case NOT_READY -> unloadUnpersistedImport(world, CreateResult.notReady());
+                            })
+                            .exceptionallyCompose(failure -> unloadAfterMetadataFailure(world, failure));
+                    }));
+            });
+        });
     }
 
     private CompletableFuture<Boolean> revalidatePersistedRuntimeIdentity(
@@ -476,7 +655,7 @@ public final class WorldLifecycleCoordinator {
             if (observed == null) {
                 return CompletableFuture.completedFuture(false);
             }
-            return metadataService.classifyLoadedIdentity(
+            return metadataService.classifyLifecycleIdentity(
                 observed.identity(), observed.lifecycleCapability()
             ).thenApply(classification -> classification.status() == WorldManagementService.UpdateStatus.UPDATED
                 && classification.metadata() != null
@@ -534,9 +713,13 @@ public final class WorldLifecycleCoordinator {
     ) {
         Objects.requireNonNull(requestedFallback, "requestedFallback");
         return withOperation(worldName, WorldOperationState.DELETING, DeleteResult.operationInProgress(), () -> {
-            final WorldMetadata metadata = metadataService.managedWorld(worldName).orElse(null);
+            final long loadGeneration = loadGeneration(worldName);
+            final WorldMetadata metadata = lifecyclableWorld(worldName).orElse(null);
             if (metadata == null) {
-                return CompletableFuture.completedFuture(DeleteResult.notManaged());
+                if (metadataService.metadataWorld(worldName).isPresent()) {
+                    return CompletableFuture.completedFuture(DeleteResult.notManaged());
+                }
+                return autoAdoptUnknownDelete(worldName, requestedFallback, event);
             }
             if (!metadata.lifecycleCapability().permitsManagedLifecycle()) {
                 return CompletableFuture.completedFuture(DeleteResult.externalOnly());
@@ -545,13 +728,23 @@ public final class WorldLifecycleCoordinator {
             if (expected == null) {
                 return CompletableFuture.completedFuture(DeleteResult.unloadFailed());
             }
-            return ioExecutor.submit(() -> storageGateway.exists(worldName)).thenCompose(exists -> continueOnGlobal(() -> {
+            return continueOnGlobal(() -> {
+                final boolean loadedAtAdmission = gateway.findWorld(expected).isPresent();
+                return ioExecutor.submit(() -> storageGateway.exists(worldName)).thenCompose(exists -> continueOnGlobal(() -> {
                 if (!exists) {
                     return CompletableFuture.completedFuture(DeleteResult.storageNotFound());
                 }
                 final WorldRuntimeGateway.LifecycleWorld source = gateway.findWorld(expected).orElse(null);
                 if (source == null) {
-                    return deleteUnloadedWorld(worldName, event);
+                    if (loadedAtAdmission) {
+                        return metadataService.ensureDesiredState(worldName, WorldLoadState.UNLOADED, event)
+                            .thenApply(update -> switch (update.status()) {
+                                case UPDATED -> DeleteResult.unloadedRequiresConfirmation();
+                                case NOT_MANAGED -> DeleteResult.notManaged();
+                                case NOT_READY -> DeleteResult.metadataRemovalFailed();
+                            });
+                    }
+                    return deleteUnloadedWorld(worldName, event, loadGeneration);
                 }
                 if (!expected.equals(source.reference())) {
                     return metadataService.classifyLoadedIdentity(source.identity(), source.lifecycleCapability())
@@ -565,23 +758,93 @@ public final class WorldLifecycleCoordinator {
                 }
                 if (gateway.playerCount(source) > 0) {
                     return gateway.teleportPlayersToWorld(source, target)
-                    .thenCompose(teleported -> continueDeleteAfterTeleport(source, teleported, event));
+                    .thenCompose(teleported -> continueDeleteAfterTeleport(
+                        source, target, teleported, event
+                    ));
                 }
                 return continueOnNonTickingGlobal(() -> deleteLoadedWorld(source, event));
-            }));
+                }));
+            });
         });
+    }
+
+    private CompletableFuture<DeleteResult> autoAdoptUnknownDelete(
+        final String worldName,
+        final Optional<String> requestedFallback,
+        final AuditEvent event
+    ) {
+        return continueOnGlobal(() -> {
+            final WorldRuntimeGateway.LifecycleWorld observed = gateway.findLoadedWorldById(worldName)
+                .orElse(null);
+            if (observed == null) {
+                return CompletableFuture.completedFuture(DeleteResult.notLoaded());
+            }
+            if (!observed.lifecycleCapability().permitsManagedLifecycle()) {
+                return CompletableFuture.completedFuture(DeleteResult.externalOnly());
+            }
+            return metadataService.adopt(
+                observed.identity(), observed.lifecycleCapability(), Optional.empty(), Optional.empty(),
+                defaultRankSystemEnabled, WorldManagementState.DETACHED,
+                WorldRegistrationSource.DELETE_AUTO, event
+            ).thenCompose(adoption -> {
+                if (adoption.status() != WorldManagementService.AdoptionStatus.ADOPTED) {
+                    return CompletableFuture.completedFuture(DeleteResult.metadataRemovalFailed());
+                }
+                return continueOnNonTickingGlobal(() -> {
+                    final WorldMetadata persisted = metadataService.detachedWorld(worldName).orElse(null);
+                    final WorldRuntimeGateway.LifecycleWorld current = gateway.findLoadedWorldById(worldName)
+                        .orElse(null);
+                    if (persisted == null
+                        || persisted.registrationSource() != WorldRegistrationSource.DELETE_AUTO
+                        || current == null
+                        || !observed.reference().equals(current.reference())
+                        || !VerifiedWorldRef.from(persisted).equals(Optional.of(observed.reference()))) {
+                        return cleanupRejectedAutoAdoption(observed, persisted);
+                    }
+                    final WorldRuntimeGateway.LifecycleWorld target = resolveFallback(
+                        current, requestedFallback
+                    ).orElse(null);
+                    if (target == null && gateway.playerCount(current) > 0) {
+                        return CompletableFuture.completedFuture(DeleteResult.fallbackUnavailable());
+                    }
+                    if (gateway.playerCount(current) > 0) {
+                        return gateway.teleportPlayersToWorld(current, target)
+                            .thenCompose(teleported -> continueDeleteAfterTeleport(
+                                current, target, teleported, event
+                            ));
+                    }
+                    return deleteLoadedWorld(current, event);
+                });
+            });
+        });
+    }
+
+    private CompletableFuture<DeleteResult> cleanupRejectedAutoAdoption(
+        final WorldRuntimeGateway.LifecycleWorld observed,
+        final WorldMetadata persisted
+    ) {
+        if (persisted == null
+            || persisted.managementState() != WorldManagementState.DETACHED
+            || persisted.registrationSource() != WorldRegistrationSource.DELETE_AUTO
+            || !VerifiedWorldRef.from(persisted).equals(Optional.of(observed.reference()))) {
+            return CompletableFuture.completedFuture(DeleteResult.unloadFailed());
+        }
+        return metadataService.purgeDetached(observed.name(), null).thenApply(removal ->
+            removal.status() == WorldManagementService.RemoveStatus.PURGED
+                ? DeleteResult.unloadFailed()
+                : DeleteResult.metadataRemovalFailed()
+        );
     }
 
     /** Records a runtime load event so an in-flight delete can compensate before permanent removal. */
     public void worldLoaded(final WorldRuntimeGateway.LifecycleWorld world) {
         final WorldRuntimeGateway.LifecycleWorld observed = Objects.requireNonNull(world, "world");
-        if (activeOperations.get(observed.name()) == WorldOperationState.DELETING) {
-            worldsLoadedDuringDelete.add(observed.reference());
-        }
+        deleteLoadGenerations.computeIfPresent(observed.name(), (ignored, generation) -> generation + 1L);
     }
 
     private CompletableFuture<DeleteResult> continueDeleteAfterTeleport(
         final WorldRuntimeGateway.LifecycleWorld source,
+        final WorldRuntimeGateway.LifecycleWorld target,
         final boolean teleported,
         final AuditEvent event
     ) {
@@ -589,6 +852,9 @@ public final class WorldLifecycleCoordinator {
             final WorldRuntimeGateway.LifecycleWorld observed = gateway.findWorld(source.reference()).orElse(null);
             if (observed == null || !source.reference().equals(observed.reference())) {
                 return CompletableFuture.completedFuture(DeleteResult.unloadFailed());
+            }
+            if (!isPinnedRuntimeWorldLoaded(target)) {
+                return CompletableFuture.completedFuture(DeleteResult.fallbackUnavailable());
             }
             if (!teleported || gateway.playerCount(source) > 0) {
                 return CompletableFuture.completedFuture(DeleteResult.playersPresent());
@@ -693,32 +959,43 @@ public final class WorldLifecycleCoordinator {
 
     private boolean saveAndUnload(final WorldRuntimeGateway.LifecycleWorld world) {
         try {
-            return gateway.unload(world, true) && gateway.findWorld(world.reference()).isEmpty();
+            if (!gateway.save(world)) {
+                return false;
+            }
+            return gateway.unload(world, false) && gateway.findWorld(world.reference()).isEmpty();
         } catch (final RuntimeException exception) {
             return false;
         }
     }
 
-    private CompletableFuture<DeleteResult> deleteUnloadedWorld(final String worldName, final AuditEvent event) {
-        return deleteStorageAndMetadata(worldName, event);
+    private CompletableFuture<DeleteResult> deleteUnloadedWorld(
+        final String worldName,
+        final AuditEvent event,
+        final long loadGeneration
+    ) {
+        return deleteStorageAndMetadata(worldName, event, loadGeneration);
     }
 
-    private CompletableFuture<DeleteResult> deleteStorageAndMetadata(final String worldName, final AuditEvent event) {
+    private CompletableFuture<DeleteResult> deleteStorageAndMetadata(
+        final String worldName,
+        final AuditEvent event,
+        final long loadGeneration
+    ) {
         final CompletableFuture<DeleteResult> result = new CompletableFuture<>();
         threadDispatcher.executeGlobalLater(deletionDelay, () -> {
-            final WorldMetadata metadata = metadataService.managedWorld(worldName).orElse(null);
+            final WorldMetadata metadata = lifecyclableWorld(worldName).orElse(null);
             if (metadata == null) {
                 result.complete(DeleteResult.notManaged());
                 return;
             }
             final VerifiedWorldRef expected = VerifiedWorldRef.from(metadata).orElse(null);
-            if (expected == null || gateway.findWorld(expected).isPresent()) {
+            if (expected == null || loadedSince(worldName, loadGeneration) || gateway.findWorld(expected).isPresent()) {
                 result.complete(DeleteResult.reloaded());
                 return;
             }
             ioExecutor.submit(() -> storageGateway.quarantine(metadata))
                 .thenCompose(quarantined -> continueOnGlobal(
-                    () -> continueDeleteAfterQuarantine(worldName, event, quarantined),
+                    () -> continueDeleteAfterQuarantine(worldName, event, loadGeneration, quarantined),
                     () -> ioExecutor.execute(() -> storageGateway.restore(quarantined))
                         .thenCompose(unused -> CompletableFuture.failedFuture(
                             new IllegalStateException("World delete was cancelled during shutdown.")))
@@ -737,36 +1014,35 @@ public final class WorldLifecycleCoordinator {
     private CompletableFuture<DeleteResult> continueDeleteAfterQuarantine(
         final String worldName,
         final AuditEvent event,
+        final long loadGeneration,
         final WorldStorageGateway.QuarantinedWorld quarantined
     ) {
-        if (gateway.findWorld(quarantined.world()).isPresent()) {
+        if (loadedSince(worldName, loadGeneration) || gateway.findWorld(quarantined.world()).isPresent()) {
             return restoreQuarantined(quarantined, DeleteResult.reloaded());
         }
-        final WorldMetadata current = metadataService.managedWorld(worldName).orElse(null);
+        final WorldMetadata current = lifecyclableWorld(worldName).orElse(null);
         if (current == null
             || current.version() != quarantined.metadataVersion()
             || !VerifiedWorldRef.from(current).equals(Optional.of(quarantined.world()))) {
             return restoreQuarantined(quarantined, DeleteResult.metadataRemovalFailed());
         }
-        return metadataService.markDeleting(worldName, event)
-            .thenCompose(update -> continueOnGlobal(() -> {
-                if (update.status() != WorldManagementService.UpdateStatus.UPDATED) {
+        final WorldDeletionClaim deletionClaim = new WorldDeletionClaim(
+            quarantined.world(), quarantined.metadataVersion(), quarantined.transactionId(),
+            current.managementState()
+        );
+        return metadataService.markDeleting(deletionClaim, event)
+            .thenCompose(update -> {
+                if (update.status() != WorldManagementService.DeletionTransitionStatus.UPDATED) {
                     return restoreQuarantined(quarantined, DeleteResult.metadataRemovalFailed());
                 }
-                final boolean observedLoad = worldsLoadedDuringDelete.removeIf(
-                    world -> world.worldId().equals(worldName)
-                );
-                if (observedLoad || gateway.findWorld(quarantined.world()).isPresent()) {
-                    return metadataService.cancelDeleting(worldName, null)
-                        .thenCompose(cancelled -> restoreQuarantined(quarantined, DeleteResult.reloaded()));
-                }
-                return ioExecutor.execute(() -> storageGateway.delete(quarantined))
-                    .thenCompose(unused -> metadataService.purge(worldName, null))
-                    .thenApply(removal -> removal.status() == WorldManagementService.RemoveStatus.PURGED
-                        ? DeleteResult.deleted()
-                        : DeleteResult.pendingRestart())
-                    .exceptionally(failure -> DeleteResult.pendingRestart());
-            }))
+                return continueOnGlobal(() -> {
+                    if (loadedSince(worldName, loadGeneration)
+                        || gateway.findWorld(quarantined.world()).isPresent()) {
+                        return CompletableFuture.completedFuture(DeleteResult.reloadedAfterTombstone());
+                    }
+                    return CompletableFuture.completedFuture(DeleteResult.pendingRestart());
+                }, () -> CompletableFuture.completedFuture(DeleteResult.pendingRestart()));
+            })
             .exceptionallyCompose(failure -> {
             final boolean deletionStarted = metadataService.metadataWorld(worldName)
                 .map(metadata -> metadata.managementState() == WorldManagementState.DELETING)
@@ -791,38 +1067,49 @@ public final class WorldLifecycleCoordinator {
         return ioExecutor.execute(() -> storageGateway.restore(quarantined)).thenApply(unused -> result);
     }
 
+    private long loadGeneration(final String worldName) {
+        return deleteLoadGenerations.getOrDefault(worldName, 0L);
+    }
+
+    private boolean loadedSince(final String worldName, final long generation) {
+        return loadGeneration(worldName) != generation;
+    }
+
+    int retainedDeleteLoadGenerationCount() {
+        return deleteLoadGenerations.size();
+    }
+
     private Optional<WorldRuntimeGateway.LifecycleWorld> resolveFallback(
         final WorldRuntimeGateway.LifecycleWorld source,
         final Optional<String> requestedFallback
     ) {
         return requestedFallback
-            .flatMap(worldId -> resolveManagedRuntimeWorld(worldId, source.reference()))
+            .flatMap(worldId -> resolveLoadedRuntimeWorld(worldId, source.reference()))
             .or(() -> fallbackWorld.flatMap(
-                worldId -> resolveManagedRuntimeWorld(worldId, source.reference())
+                worldId -> resolveLoadedRuntimeWorld(worldId, source.reference())
             ))
             .or(() -> gateway.primaryWorld().flatMap(primary ->
-                resolveManagedRuntimeWorld(primary.name(), source.reference())
+                resolveLoadedRuntimeWorld(primary.name(), source.reference())
                     .filter(resolved -> resolved.reference().equals(primary.reference()))
             ));
     }
 
-    private Optional<WorldRuntimeGateway.LifecycleWorld> resolveManagedRuntimeWorld(
+    private Optional<WorldRuntimeGateway.LifecycleWorld> resolveLoadedRuntimeWorld(
         final String worldId,
         final VerifiedWorldRef source
     ) {
         if (source.worldId().equals(worldId)) {
             return Optional.empty();
         }
-        final WorldMetadata metadata = metadataService.managedWorld(worldId).orElse(null);
-        if (metadata == null
-            || metadata.lifecycleCapability() != io.github.bearl.worldmanagement.world.LifecycleCapability.MANAGED) {
-            return Optional.empty();
-        }
-        final VerifiedWorldRef expected = VerifiedWorldRef.from(metadata).orElse(null);
-        if (expected == null || expected.equals(source)) {
-            return Optional.empty();
-        }
-        return gateway.findWorld(expected).filter(observed -> expected.equals(observed.reference()));
+        return gateway.findLoadedWorldById(worldId)
+            .filter(target -> !target.reference().equals(source))
+            .filter(target -> !target.reference().worldUuid().equals(source.worldUuid()));
+    }
+
+    private boolean isPinnedRuntimeWorldLoaded(final WorldRuntimeGateway.LifecycleWorld target) {
+        return gateway.findWorld(target.reference())
+            .filter(current -> current.reference().equals(target.reference()))
+            .isPresent();
     }
 
     private <T> CompletableFuture<T> continueOnGlobal(final java.util.function.Supplier<CompletableFuture<T>> operation) {
@@ -951,6 +1238,16 @@ public final class WorldLifecycleCoordinator {
         }
     }
 
+    private Optional<WorldMetadata> lifecyclableWorld(final String worldName) {
+        final WorldMetadata metadata = metadataService.metadataWorld(worldName).orElse(null);
+        if (metadata == null) {
+            return Optional.empty();
+        }
+        final WorldManagementState state = metadata.managementState();
+        return (state == WorldManagementState.ACTIVE || state == WorldManagementState.DETACHED)
+            ? Optional.of(metadata) : Optional.empty();
+    }
+
     private <T> CompletableFuture<T> withOperation(
         final String worldName,
         final WorldOperationState state,
@@ -964,10 +1261,16 @@ public final class WorldLifecycleCoordinator {
                 logOperation(worldName, state, "operation_in_progress", startedAt, null);
                 return CompletableFuture.completedFuture(operationInProgress);
             }
+            if (state == WorldOperationState.DELETING) {
+                deleteLoadGenerations.put(worldName, 0L);
+            }
             pendingOperations.add(trackedOperation);
         }
         try {
             operation.get().whenComplete((result, failure) -> {
+                if (state == WorldOperationState.DELETING) {
+                    deleteLoadGenerations.remove(worldName);
+                }
                 activeOperations.remove(worldName, state);
                 if (failure == null) {
                     trackedOperation.complete(result);
@@ -980,6 +1283,9 @@ public final class WorldLifecycleCoordinator {
                 logOperation(worldName, state, result == null ? "unknown" : result.toString(), startedAt, failure);
             });
         } catch (final RuntimeException exception) {
+            if (state == WorldOperationState.DELETING) {
+                deleteLoadGenerations.remove(worldName);
+            }
             activeOperations.remove(worldName, state);
             trackedOperation.completeExceptionally(exception);
             synchronized (operationLock) {
@@ -991,13 +1297,12 @@ public final class WorldLifecycleCoordinator {
     }
 
     public CompletableFuture<Void> beginShutdown() {
-        final CompletableFuture<Void> drain;
+        final CompletableFuture<Void> coordinatorDrain;
         synchronized (operationLock) {
             acceptingOperations = false;
-            drain = CompletableFuture.allOf(pendingOperations.toArray(CompletableFuture[]::new));
+            coordinatorDrain = CompletableFuture.allOf(pendingOperations.toArray(CompletableFuture[]::new));
         }
-        gateway.cancelPendingOperations();
-        return drain;
+        return CompletableFuture.allOf(coordinatorDrain, gateway.beginShutdown());
     }
 
     private void logOperation(
@@ -1061,6 +1366,7 @@ public final class WorldLifecycleCoordinator {
 
     public enum RemoveStatus {
         DETACHED,
+        PURGED,
         NOT_MANAGED,
         NOT_UNLOADED,
         NOT_READY,
@@ -1069,10 +1375,29 @@ public final class WorldLifecycleCoordinator {
 
     public record RemoveResult(RemoveStatus status) {
         private static RemoveResult detached() { return new RemoveResult(RemoveStatus.DETACHED); }
+        private static RemoveResult purged() { return new RemoveResult(RemoveStatus.PURGED); }
         private static RemoveResult notManaged() { return new RemoveResult(RemoveStatus.NOT_MANAGED); }
         private static RemoveResult notUnloaded() { return new RemoveResult(RemoveStatus.NOT_UNLOADED); }
         private static RemoveResult notReady() { return new RemoveResult(RemoveStatus.NOT_READY); }
         private static RemoveResult operationInProgress() { return new RemoveResult(RemoveStatus.OPERATION_IN_PROGRESS); }
+    }
+
+    public enum ManageStatus {
+        MANAGED,
+        NOT_DETACHED,
+        IDENTITY_MISMATCH,
+        NOT_READY,
+        OPERATION_IN_PROGRESS
+    }
+
+    public record ManageResult(ManageStatus status) {
+        private static ManageResult managed() { return new ManageResult(ManageStatus.MANAGED); }
+        private static ManageResult notDetached() { return new ManageResult(ManageStatus.NOT_DETACHED); }
+        private static ManageResult identityMismatch() { return new ManageResult(ManageStatus.IDENTITY_MISMATCH); }
+        private static ManageResult notReady() { return new ManageResult(ManageStatus.NOT_READY); }
+        private static ManageResult operationInProgress() {
+            return new ManageResult(ManageStatus.OPERATION_IN_PROGRESS);
+        }
     }
 
     public enum LifecycleStatus {
@@ -1112,6 +1437,7 @@ public final class WorldLifecycleCoordinator {
         PENDING_RESTART,
         UNLOADED_REQUIRES_CONFIRMATION,
         RELOADED,
+        RELOADED_AFTER_TOMBSTONE,
         NOT_MANAGED,
         NOT_LOADED,
         PLAYERS_PRESENT,
@@ -1130,6 +1456,9 @@ public final class WorldLifecycleCoordinator {
             return new DeleteResult(DeleteStatus.UNLOADED_REQUIRES_CONFIRMATION);
         }
         private static DeleteResult reloaded() { return new DeleteResult(DeleteStatus.RELOADED); }
+        private static DeleteResult reloadedAfterTombstone() {
+            return new DeleteResult(DeleteStatus.RELOADED_AFTER_TOMBSTONE);
+        }
         private static DeleteResult notManaged() { return new DeleteResult(DeleteStatus.NOT_MANAGED); }
         private static DeleteResult notLoaded() { return new DeleteResult(DeleteStatus.NOT_LOADED); }
         private static DeleteResult playersPresent() { return new DeleteResult(DeleteStatus.PLAYERS_PRESENT); }

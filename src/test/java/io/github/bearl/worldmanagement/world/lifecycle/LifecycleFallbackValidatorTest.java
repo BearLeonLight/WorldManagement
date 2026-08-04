@@ -15,35 +15,28 @@ import org.junit.jupiter.api.Test;
 final class LifecycleFallbackValidatorTest {
 
     @Test
-    void rejectsConfiguredFallbackWithoutManagedMetadata() {
+    void acceptsConfiguredFallbackWithoutManagedMetadataWhenUniquelyLoaded() {
         final LifecycleFallbackValidator validator = new LifecycleFallbackValidator();
-
-        assertThrows(
-            IllegalArgumentException.class,
-            () -> validator.requireUsable(
-                Optional.of("lobby"), worldName -> Optional.empty(), expected -> Optional.empty()
-            )
+        final WorldMetadata runtimeMetadata = WorldMetadata.createDefault("lobby", true);
+        final WorldRuntimeGateway.LifecycleWorld runtime = new WorldRuntimeGateway.LifecycleWorld(
+            runtimeMetadata.identity(), LifecycleCapability.MANAGED
         );
+
+        assertEquals(runtime.reference(), validator.resolveUsable(
+            Optional.of("lobby"), worldName -> Optional.of(runtime)
+        ).orElseThrow());
     }
 
     @Test
-    void rejectsNonVerifiedOrExternalOnlyFallbackMetadata() {
+    void acceptsDetachedOrExternalRuntimeFallback() {
         final LifecycleFallbackValidator validator = new LifecycleFallbackValidator();
         final WorldMetadata managed = WorldMetadata.createDefault("lobby", true);
-        final WorldIdentitySnapshot drifted = new WorldIdentitySnapshot(
-            managed.identity().paperKey(), managed.identity().worldUuid(),
-            WorldEnvironment.NORMAL, managed.identity().seed() + 1, managed.identity().generateStructures()
-        );
-        final WorldMetadata syncPending = managed.withObservedIdentity(drifted);
-        final WorldMetadata externalOnly = WorldMetadata.createDefault(
-            "lobby", managed.identity(), LifecycleCapability.EXTERNAL_ONLY, Optional.empty(), true
+        final WorldRuntimeGateway.LifecycleWorld external = new WorldRuntimeGateway.LifecycleWorld(
+            managed.identity(), LifecycleCapability.EXTERNAL_ONLY
         );
 
-        assertThrows(IllegalArgumentException.class, () -> validator.requireUsable(
-            Optional.of("lobby"), worldName -> Optional.of(syncPending), expected -> Optional.empty()
-        ));
-        assertThrows(IllegalArgumentException.class, () -> validator.requireUsable(
-            Optional.of("lobby"), worldName -> Optional.of(externalOnly), expected -> Optional.empty()
+        assertDoesNotThrow(() -> validator.requireUsable(
+            Optional.of("lobby"), worldName -> Optional.of(external)
         ));
     }
 
@@ -59,8 +52,7 @@ final class LifecycleFallbackValidatorTest {
 
         assertThrows(IllegalArgumentException.class, () -> validator.requireUsable(
             Optional.of("lobby"),
-            worldName -> Optional.of(managed),
-            expected -> Optional.of(new WorldRuntimeGateway.LifecycleWorld(replacement, LifecycleCapability.MANAGED))
+            worldName -> Optional.empty()
         ));
     }
 
@@ -73,18 +65,18 @@ final class LifecycleFallbackValidatorTest {
         );
 
         assertDoesNotThrow(() -> validator.requireUsable(
-            Optional.empty(), worldName -> Optional.empty(), expected -> Optional.empty()
+            Optional.empty(), worldName -> Optional.empty()
         ));
         assertDoesNotThrow(() -> validator.requireUsable(
-            Optional.of("lobby"), worldName -> Optional.of(managed), expected -> Optional.of(runtime)
+            Optional.of("lobby"), worldName -> Optional.of(runtime)
         ));
         assertEquals(managed.identity().worldUuid(), validator.resolveUsable(
-            Optional.of("lobby"), worldName -> Optional.of(managed), expected -> Optional.of(runtime)
+            Optional.of("lobby"), worldName -> Optional.of(runtime)
         ).orElseThrow().worldUuid());
     }
 
     @Test
-    void rejectsFallbackWithSnapshotDriftDespiteMatchingKeyAndUuid() {
+    void pinsObservedRuntimeSnapshot() {
         final LifecycleFallbackValidator validator = new LifecycleFallbackValidator();
         final WorldMetadata managed = WorldMetadata.createDefault("lobby", true);
         final WorldIdentitySnapshot drifted = new WorldIdentitySnapshot(
@@ -92,10 +84,11 @@ final class LifecycleFallbackValidatorTest {
             managed.identity().seed() + 1L, managed.identity().generateStructures()
         );
 
-        assertThrows(IllegalArgumentException.class, () -> validator.resolveUsable(
+        assertEquals(drifted.worldUuid(), validator.resolveUsable(
             Optional.of("lobby"),
-            worldName -> Optional.of(managed),
-            expected -> Optional.of(new WorldRuntimeGateway.LifecycleWorld(drifted, LifecycleCapability.MANAGED))
-        ));
+            worldName -> Optional.of(new WorldRuntimeGateway.LifecycleWorld(
+                drifted, LifecycleCapability.MANAGED
+            ))
+        ).orElseThrow().worldUuid());
     }
 }

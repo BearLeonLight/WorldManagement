@@ -19,7 +19,7 @@ storage:
 
 首次啟動時，設定 loader 會在 plugin data folder 建立 `modules.yml`；它不會包入 JAR resource。重啟後生效。
 
-`lifecycle` 控制 create/load/unload/remove/import/delete 與 adopt；`warp` 控制 Warp/trust；`ownership` 控制 owner/rank/access；`storage` 控制 migration；`protection` 控制 cache-only protection listener。
+`lifecycle` 控制 create/load/unload/remove/import/delete 與 adopt；`warp` 控制 Warp/trust；`ownership` 控制 owner/rank/access；`storage` 控制 migration；`protection` 控制 cache-only entry/build/interact/container治理listener。world identity conflict與`DELETING` runtime的玩家隔離屬lifecycle安全邊界，永遠啟用且不接受一般protection bypass。
 
 ## `commands.yml`
 
@@ -158,7 +158,7 @@ SQLite 已由測試驗證。MySQL/MariaDB 使用相同 JDBC adapter，需在目�
 
 `ownership.maximum-custom-ranks` 會限制每個世界可建立的自訂 rank 數；系統 `OWNER` 與 `GUEST` 不計入限制。`warp.enabled: false` 會停用 `/wm warp`，既有 metadata 不會被刪除。
 
-`lifecycle.fallback-world` 可選擇一個啟動時已載入的fallback world；名稱存在但未載入會使WorldManagement fail-closed停用。`unload`/`delete`也可在指令中指定不同且已載入的fallback；只有目標世界仍有玩家時才需要relocation。WorldManagement會在每位玩家的entity scheduler排程`teleportAsync`；所有傳送成功且原世界無玩家後，才在global scheduler顯式執行同步Paper world save並以`save=false`卸載。save失敗會保留loaded world；Paper未提供可供plugin等待的async world-save completion。已載入世界的confirmed delete第一次只完成save/unload；再次confirmed delete會移入quarantine、留下`DELETING` tombstone，接著在同一runtime永久刪除storage並purge metadata。只有tombstone後的永久storage delete或metadata purge失敗才保留刪除狀態，交由下一次啟動recovery完成。`deletion-delay-milliseconds`由global scheduler計時，不占用I/O worker；延遲期滿前或tombstone寫入期間若世界被外部重新載入，刪除會中止、還原storage與metadata。
+`lifecycle.fallback-world` 可選擇一個啟動時唯一載入的runtime world，不要求WorldManagement metadata；名稱未載入或ambiguous會使WorldManagement fail-closed停用。`unload`/`delete`也可指定任一不同且唯一載入的fallback，並在玩家傳送完成後重驗pinned identity。save失敗會保留loaded world；Paper未提供可供plugin等待的async world-save completion。已載入世界的confirmed delete第一次只完成save/unload；再次confirmed delete會移入quarantine並留下transaction-bound `DELETING` tombstone，同一runtime不永久刪除。下一次啟動recovery核對identity/version/transaction後才刪除quarantine並purge metadata。`deletion-delay-milliseconds`由global scheduler計時，不占用I/O worker；tombstone前若世界被外部重新載入或mutation失敗，刪除會中止並還原可恢復資料。
 
 首次啟動會建立 `hooks.yml` 與 `messages_zh_TW.yml`。`hooks.yml`的`luckperms.enabled`控制optional LuckPerms API整合。服務可用時，Warp `required-permission`使用目的Bukkit world context的LuckPerms cached permission；服務缺失、停用或查詢失敗時，非空外部permission會fail closed。一般command permission與protection bypass仍由Paper/Bukkit判斷。`locale`決定使用的`messages_<locale>.yml`。
 

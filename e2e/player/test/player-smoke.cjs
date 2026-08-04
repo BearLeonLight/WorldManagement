@@ -5,7 +5,6 @@ const path = require('node:path')
 const zlib = require('node:zlib')
 const assert = require('node:assert/strict')
 const { spawn } = require('node:child_process')
-const { finished } = require('node:stream/promises')
 const minecraftData = require('minecraft-data')
 const minecraftProtocol = require('minecraft-protocol')
 const mineflayer = require('mineflayer')
@@ -17,6 +16,8 @@ const { resolveCheckedArtifact } = require('./via-artifacts.cjs')
 const { literalChildren, literalChildrenAt } = require('./command-tree.cjs')
 const { assertCommandMatchesPath, assertRuntimeCoverage } = require('../../runtime-coverage.cjs')
 const { resolveBuildChild } = require('../../build-child-path.cjs')
+const { closeLogStream, createChildProcessDeadline, stopChildProcess } = require('../../process-control.cjs')
+const { createOutputMonitor } = require('./output-monitor.cjs')
 
 const BOT_NAME = 'WmLifecycleE2E'
 const OWNER_BOT_NAME = 'WmOwnerE2E'
@@ -27,6 +28,8 @@ const LUCKPERMS_PERMISSION = 'worldmanagement.e2e.destination-warp'
 const SHUTDOWN_FAILURES = ['zip file error', 'I/O shutdown failed', 'did not drain']
 const SHUTDOWN_COMPLETE = 'WorldManagement terminal shutdown complete.'
 const PROJECT_ROOT = path.resolve(__dirname, '..', '..', '..')
+const activePaperProcesses = new Set()
+const suiteDeadline = createChildProcessDeadline(activePaperProcesses, 600000, 'Player E2E')
 let passedCommandChecks = 0
 const coveredPaths = new Set()
 
@@ -242,25 +245,22 @@ async function startPaperAttempt (configuration, mode, viaPlugins, luckPermsPlug
   ].join('\n'))
 
   const logPath = path.join(serverDirectory, 'latest.log')
-  const { paper, logFile } = launchPaper(configuration.javaExecutable, serverDirectory, logPath, 'w')
+  const { paper, logFile, outputMonitor } = launchPaper(configuration.javaExecutable, serverDirectory, logPath, 'w')
   const attempt = {
-    mode, serverDirectory, logFile, logPath, paper, port,
+    mode, serverDirectory, logFile, logPath, paper, outputMonitor, port,
     javaExecutable: configuration.javaExecutable, stopped: false
   }
 
   try {
-    await timeout(waitForOutput(paper, '[WorldManagement] Enabled WorldManagement'), 120000, `${mode} Paper and WorldManagement startup`)
-    const startupLog = fs.readFileSync(logPath, 'utf8')
-    if (!startupLog.includes('LuckPerms') || !startupLog.includes('LuckPerms: available')) {
-      throw new Error(`The ${mode} Paper attempt did not initialize the LuckPerms service and WorldManagement hook.`)
-    }
+    await timeout(waitForObservedOutput(paper, '[WorldManagement] Enabled WorldManagement'), 120000, `${mode} Paper and WorldManagement startup`)
+    await timeout(waitForObservedOutput(paper, 'LuckPerms: available'), 10000, `${mode} LuckPerms hook startup`)
     if (viaPlugins.length > 0) {
-      if (!startupLog.includes('ViaVersion') || !startupLog.includes('ViaBackwards')) {
-        throw new Error(`The ${mode} Paper attempt did not initialize both Via plugins.`)
-      }
-      if (!startupLog.includes('Registering protocol transformers and injecting')) {
-        throw new Error(`The ${mode} Paper attempt did not report ViaVersion protocol injection.`)
-      }
+      await timeout(waitForObservedOutput(paper, 'ViaBackwards'), 10000, `${mode} ViaBackwards startup`)
+      await timeout(
+        waitForObservedOutput(paper, 'Registering protocol transformers and injecting'),
+        10000,
+        `${mode} ViaVersion protocol injection`
+      )
     }
     return attempt
   } catch (error) {
@@ -272,13 +272,16 @@ async function startPaperAttempt (configuration, mode, viaPlugins, luckPermsPlug
 function launchPaper (javaExecutable, serverDirectory, logPath, flags) {
   const logFile = fs.createWriteStream(logPath, { encoding: 'utf8', flags })
   const paper = spawn(javaExecutable, [
-    '-Xms512M', '-Xmx512M',
+    '-Xms512M', '-Xmx1024M',
     '-Dfile.encoding=UTF-8', '-Dstdout.encoding=UTF-8', '-Dstderr.encoding=UTF-8',
     '-jar', 'paper.jar', '--nogui'
   ], { cwd: serverDirectory, stdio: ['pipe', 'pipe', 'pipe'] })
+  const outputMonitor = createOutputMonitor(paper)
+  activePaperProcesses.add(paper)
   paper.stdout.pipe(logFile, { end: false })
   paper.stderr.pipe(logFile, { end: false })
-  return { paper, logFile }
+  paper.wmOutputMonitor = outputMonitor
+  return { paper, logFile, outputMonitor }
 }
 
 async function runPlayerFlow (attempt, clientVersion) {
@@ -302,6 +305,76 @@ async function runPlayerFlow (attempt, clientVersion) {
     await disconnectBot(ownerBot, 'owner fixture disconnect')
     ownerBot = undefined
     await grantOperator(attempt, bot)
+
+    await consoleCommand(
+      attempt, 'wm create detachedtarget NORMAL NORMAL',
+      '世界 detachedtarget 已建立並加入管理', 'create detached lifecycle fixture',
+      'wm create <world> <environment> <world-type>'
+    )
+    await supportCommand(
+      attempt, 'wme2e world create runtimefallback',
+      'WM_E2E_WORLD_CREATED world=minecraft:runtimefallback loaded=true',
+      'create unknown runtime fallback fixture'
+    )
+    await command(
+      bot, '/wm tp self detachedtarget 90 90 92',
+      '已傳送至世界 detachedtarget', 'enter detach fixture',
+      'wm tp self <world> <x> <y> <z>'
+    )
+    await assertPlayerWorld(attempt, bot, 'minecraft:detachedtarget', 'loaded remove source world')
+    await timeout(bot.waitForChunksToLoad(), 10000, 'detached fixture chunk load')
+    await command(
+      bot, '/wm remove detachedtarget',
+      '世界 detachedtarget 已停止管理', 'remove loaded world without unload',
+      'wm remove <world>', false
+    )
+    await assertPlayerWorld(attempt, bot, 'minecraft:detachedtarget', 'loaded remove preserves world')
+    assert.equal(readWorldMetadata(attempt, 'detachedtarget')['management-state'], 'DETACHED')
+
+    await deopPlayer(attempt, bot)
+    await supportCommand(
+      attempt,
+      `wme2e player break-probe ${BOT_NAME}`,
+      `WM_E2E_PLAYER_BREAK_PROBE player=${BOT_NAME} world=minecraft:detachedtarget cancelled=false final=AIR`,
+      'detached governance disabled break probe'
+    )
+    await grantOperator(attempt, bot)
+    await consoleTeleport(
+      attempt, BOT_NAME, 'minecraft:overworld', 0, 90, 0, 'minecraft:detachedtarget'
+    )
+    await command(
+      bot, '/wm tp self detachedtarget',
+      '已傳送至世界 detachedtarget', 'teleport to detached world',
+      'wm tp self <world>'
+    )
+    await assertPlayerWorld(attempt, bot, 'minecraft:detachedtarget', 'detached teleport target')
+    await command(
+      bot, '/wm unload detachedtarget runtimefallback',
+      '世界 detachedtarget 已unloaded', 'unknown runtime fallback relocation',
+      'wm unload <world> <fallback>'
+    )
+    await assertPlayerWorld(attempt, bot, 'minecraft:runtimefallback', 'unknown runtime fallback world')
+    await command(
+      bot, `/wm delete runtimefallback ${OVERWORLD_ID} confirm`,
+      '世界 runtimefallback 已完成存檔並卸載', 'unknown runtime delete auto-adopt',
+      'wm delete <world> <fallback> confirm'
+    )
+    await assertPlayerWorld(attempt, bot, 'minecraft:overworld', 'unknown delete fallback world')
+    const autoDeleteDetached = readWorldMetadata(attempt, 'runtimefallback')
+    assert.equal(autoDeleteDetached['management-state'], 'DETACHED')
+    assert.equal(autoDeleteDetached['registration-source'], 'DELETE_AUTO')
+    await command(
+      bot, `/wm delete runtimefallback ${OVERWORLD_ID} confirm`,
+      '將於下次伺服器啟動時完成刪除', 'unknown runtime delete pending restart',
+      'wm delete <world> <fallback> confirm'
+    )
+    const autoDeleteDeleting = readWorldMetadata(attempt, 'runtimefallback')
+    assert.equal(autoDeleteDeleting['management-state'], 'DELETING')
+    assert.equal(autoDeleteDeleting['registration-source'], 'DELETE_AUTO')
+    assert.match(
+      autoDeleteDeleting.deletion?.['transaction-id'],
+      /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i
+    )
 
     bot.chat(`/tp ${BOT_NAME} 40 90 40`)
     await waitForPosition(bot, { x: 40, y: 90, z: 40 }, 'self teleport setup')
@@ -359,12 +432,18 @@ async function runPlayerFlow (attempt, clientVersion) {
     await command(bot, `/wm delete deletiontarget ${OVERWORLD_ID} confirm`, '已完成存檔並卸載', 'delete fallback unload confirmation', 'wm delete <world> <fallback> confirm')
     await assertPlayerWorld(attempt, bot, 'minecraft:overworld', 'delete fallback world')
     await waitUntilMovedFrom(bot, deleteSourcePosition, 'delete fallback relocation')
-    await command(bot, `/wm delete deletiontarget ${OVERWORLD_ID} confirm`, '已永久刪除', 'delete fallback permanent delete', 'wm delete <world> <fallback> confirm')
+    await command(bot, `/wm delete deletiontarget ${OVERWORLD_ID} confirm`, '將於下次伺服器啟動時完成刪除', 'delete fallback pending restart', 'wm delete <world> <fallback> confirm')
     const metadataPath = path.join(attempt.serverDirectory, 'plugins', 'WorldManagement', 'worlds', 'deletiontarget.yml')
-    if (fs.existsSync(metadataPath)) throw new Error('Deletion target metadata remained after permanent delete.')
-    if (findDirectories(attempt.serverDirectory, '.worldmanagement-quarantine').length > 0) {
-      throw new Error('World quarantine remained after player fallback delete.')
-    }
+    const deletingMetadata = YAML.parse(fs.readFileSync(metadataPath, 'utf8'))
+    assert.equal(deletingMetadata['management-state'], 'DELETING')
+    assert.match(
+      deletingMetadata.deletion?.['transaction-id'],
+      /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i
+    )
+    assert.ok(
+      findDirectories(attempt.serverDirectory, '.worldmanagement-quarantine').length > 0,
+      'Pending player fallback delete did not retain a quarantine claim.'
+    )
 
     await command(bot, '/wm ownership access teleporttarget mode NONE', '世界存取設定已更新', 'open LuckPerms destination world', 'wm ownership access <world> <operation> <value>')
     await command(bot, '/wm tp self teleporttarget 60 90 60', '已傳送至世界 teleporttarget', 'enter LuckPerms warp destination', 'wm tp self <world> <x> <y> <z>')
@@ -386,6 +465,27 @@ async function runPlayerFlow (attempt, clientVersion) {
     const replacement = await replacePaperWorldIdentity(attempt, IDENTITY_WORLD_ID)
     setWarpRequiredPermission(attempt, 'teleporttarget', LUCKPERMS_WARP, LUCKPERMS_PERMISSION)
     await restartPaperAttempt(attempt)
+    assert.equal(
+      fs.existsSync(path.join(
+        attempt.serverDirectory, 'plugins', 'WorldManagement', 'worlds', 'deletiontarget.yml'
+      )),
+      false,
+      'Startup recovery left managed deletion metadata behind.'
+    )
+    assert.equal(
+      fs.existsSync(path.join(
+        attempt.serverDirectory, 'plugins', 'WorldManagement', 'worlds', 'runtimefallback.yml'
+      )),
+      false,
+      'Startup recovery left DELETE_AUTO metadata behind.'
+    )
+    assert.equal(
+      findDirectories(attempt.serverDirectory, '.worldmanagement-quarantine').some(directory =>
+        fs.readdirSync(directory).length > 0
+      ),
+      false,
+      'Startup recovery left player E2E quarantine claims behind.'
+    )
     const conflicted = await waitForIdentityState(attempt, IDENTITY_WORLD_ID, 'CONFLICT')
     assert.equal(
       conflicted.identity.accepted['world-uuid'],
@@ -499,12 +599,12 @@ async function connectPlayer (attempt, clientVersion, username = BOT_NAME) {
 }
 
 async function verifyPermissionCommandTree (attempt, bot) {
-  await waitForCommandChildren(bot, ['warp'], 'non-operator default command tree')
-  await setPermissionAndWait(attempt, bot, 'worldmanagement.command.warp', false, [])
-  await setPermissionAndWait(attempt, bot, 'worldmanagement.command.list', true, ['list'])
-  await setPermissionAndWait(attempt, bot, 'worldmanagement.command.list', false, [])
+  await waitForCommandChildren(bot, ['help', 'warp'], 'non-operator default command tree')
+  await setPermissionAndWait(attempt, bot, 'worldmanagement.command.warp', false, ['help'])
+  await setPermissionAndWait(attempt, bot, 'worldmanagement.command.list', true, ['help', 'list'])
+  await setPermissionAndWait(attempt, bot, 'worldmanagement.command.list', false, ['help'])
 
-  const refreshed = waitForCommandChildren(bot, ['warp'], 'permission attachment clear', true)
+  const refreshed = waitForCommandChildren(bot, ['help', 'warp'], 'permission attachment clear', true)
   await supportCommand(
     attempt,
     `wme2e permission clear ${BOT_NAME}`,
@@ -569,8 +669,8 @@ async function verifyLuckPermsDestinationPermission (attempt, bot) {
 }
 
 async function verifyExplicitTeleportPermissions (attempt, bot) {
-  await setPermissionAndWait(attempt, bot, 'worldmanagement.command.warp', false, [])
-  await setPermissionAndWait(attempt, bot, 'worldmanagement.command.tp', true, ['tp'])
+  await setPermissionAndWait(attempt, bot, 'worldmanagement.command.warp', false, ['help'])
+  await setPermissionAndWait(attempt, bot, 'worldmanagement.command.tp', true, ['help', 'tp'])
   await waitForNestedCommandChildren(bot, ['wm', 'tp'], ['self'], 'base teleport command tree')
 
   await setPermissionAndWaitForPath(
@@ -600,7 +700,7 @@ async function verifyExplicitTeleportPermissions (attempt, bot) {
   )
   await assertPlayerWorld(attempt, bot, 'minecraft:teleporttarget', 'two permission any target world')
 
-  const refreshed = waitForCommandChildren(bot, ['warp'], 'explicit teleport permission clear', true)
+  const refreshed = waitForCommandChildren(bot, ['help', 'warp'], 'explicit teleport permission clear', true)
   await supportCommand(
     attempt,
     `wme2e permission clear ${BOT_NAME}`,
@@ -807,7 +907,7 @@ async function grantOperator (attempt, bot) {
 }
 
 async function deopPlayer (attempt, bot) {
-  const refreshed = waitForCommandChildren(bot, ['warp'], 'non-operator command tree after deop', true)
+  const refreshed = waitForCommandChildren(bot, ['help', 'warp'], 'non-operator command tree after deop', true)
   const removed = waitForOutput(attempt.paper, `Made ${BOT_NAME} no longer a server operator`)
   attempt.paper.stdin.write(`deop ${BOT_NAME}\n`)
   await timeout(removed, 10000, 'remove operator permission')
@@ -871,19 +971,15 @@ async function stopPaperAttempt (attempt) {
   if (!attempt || attempt.stopped) return
   attempt.stopped = true
   const { paper, logFile, logPath } = attempt
-  const shutdownStart = fs.existsSync(logPath) ? fs.statSync(logPath).size : 0
-  if (paper.exitCode === null) {
-    paper.stdin.write('stop\n')
-    await timeout(new Promise(resolve => paper.once('exit', resolve)), 30000, `${attempt.mode} Paper shutdown`)
-      .catch(async () => {
-        paper.kill()
-        await timeout(new Promise(resolve => paper.once('exit', resolve)), 10000, `forced ${attempt.mode} Paper shutdown`)
-      })
+  const shutdownStart = fs.existsSync(logPath) ? fs.readFileSync(logPath, 'utf8').length : 0
+  try {
+    await stopChildProcess(paper, `${attempt.mode} Paper`)
+  } finally {
+    activePaperProcesses.delete(paper)
+    await closeLogStream(logFile)
   }
-  logFile.end()
-  await finished(logFile)
   if (paper.exitCode !== 0) {
-    throw new Error(`${attempt.mode} Paper exited with code ${paper.exitCode}.`)
+    throw new Error(`${attempt.mode} Paper exited with ${paper.exitCode ?? paper.signalCode}.`)
   }
   const shutdownLog = fs.readFileSync(logPath, 'utf8').slice(shutdownStart)
   if (!shutdownLog.includes(SHUTDOWN_COMPLETE)) {
@@ -899,16 +995,32 @@ async function restartPaperAttempt (attempt) {
   const pluginConfig = YAML.parse(fs.readFileSync(pluginConfigPath, 'utf8'))
   pluginConfig.lifecycle = { ...(pluginConfig.lifecycle || {}), 'fallback-world': OVERWORLD_ID }
   fs.writeFileSync(pluginConfigPath, YAML.stringify(pluginConfig))
+  const modulesPath = path.join(attempt.serverDirectory, 'plugins', 'WorldManagement', 'modules.yml')
+  const modules = YAML.parse(fs.readFileSync(modulesPath, 'utf8'))
+  modules.protection = { ...(modules.protection || {}), enabled: false }
+  fs.writeFileSync(modulesPath, YAML.stringify(modules))
 
   const launched = launchPaper(attempt.javaExecutable, attempt.serverDirectory, attempt.logPath, 'a')
   attempt.paper = launched.paper
   attempt.logFile = launched.logFile
   attempt.stopped = false
   await timeout(
-    waitForOutput(attempt.paper, '[WorldManagement] Enabled WorldManagement'),
+    waitForObservedOutput(attempt.paper, '[WorldManagement] Enabled WorldManagement'),
     120000,
     `${attempt.mode} Paper identity replacement restart`
   )
+  await Promise.all([
+    timeout(
+      waitForObservedOutput(attempt.paper, 'Protection listener disabled with protection module'),
+      10000,
+      `${attempt.mode} disabled protection governance`
+    ),
+    timeout(
+      waitForObservedOutput(attempt.paper, 'Lifecycle isolation listener registered'),
+      10000,
+      `${attempt.mode} lifecycle isolation startup`
+    )
+  ])
 }
 
 async function replacePaperWorldIdentity (attempt, worldId) {
@@ -972,13 +1084,13 @@ function protocolForVersion (version) {
   return minecraftData.versionsByMinecraftVersion.pc[version]?.version
 }
 
-async function command (bot, input, expected, label, commandPath) {
+async function command (bot, input, expected, label, commandPath, creditCoverage = true) {
   assertCommandMatchesPath(input, commandPath)
   const response = onceMatching(bot, 'messagestr', message => message.includes(expected))
   bot.chat(input)
   await timeout(response, 30000, label)
   passedCommandChecks++
-  coveredPaths.add(commandPath)
+  if (creditCoverage) coveredPaths.add(commandPath)
 }
 
 async function externalConsoleCommand (attempt, input, expected, label) {
@@ -1014,8 +1126,10 @@ async function supportCommand (attempt, input, expected, label) {
   await timeout(response, 10000, label)
 }
 
-async function consoleTeleport (attempt, playerName, destination, x, y, z) {
-  const source = destination === 'minecraft:overworld' ? 'minecraft:teleporttarget' : 'minecraft:overworld'
+async function consoleTeleport (
+  attempt, playerName, destination, x, y, z,
+  source = destination === 'minecraft:overworld' ? 'minecraft:teleporttarget' : 'minecraft:overworld'
+) {
   const changedWorld = waitForOutput(
     attempt.paper,
     `WM_E2E_EVENT_CHANGED_WORLD player=${playerName} from=${source} to=${destination}`
@@ -1095,29 +1209,17 @@ function requiredValue (environmentName) {
 }
 
 function waitForOutput (process, marker) {
-  return new Promise((resolve, reject) => {
-    const inspect = data => {
-      const output = data.toString('utf8').replace(/\u001B\[[\d;]*[^\d;]/g, '')
-      if (!output.includes(marker)) return
-      cleanup()
-      resolve()
-    }
-    const exited = code => {
-      cleanup()
-      reject(new Error(`Paper exited with code ${code} before output marker: ${marker}`))
-    }
-    const cleanup = () => {
-      process.stdout.off('data', inspect)
-      process.stderr.off('data', inspect)
-      process.off('exit', exited)
-    }
-    process.stdout.on('data', inspect)
-    process.stderr.on('data', inspect)
-    process.on('exit', exited)
-  })
+  return process.wmOutputMonitor.waitForNext(marker)
+}
+
+function waitForObservedOutput (process, marker) {
+  return process.wmOutputMonitor.waitFor(marker)
 }
 
 main().catch(error => {
-  console.error(error.stack || error)
+  const reported = suiteDeadline.expired() ? suiteDeadline.failure(error) : error
+  console.error(reported.stack || reported)
   process.exitCode = 1
+}).finally(() => {
+  suiteDeadline.close()
 })

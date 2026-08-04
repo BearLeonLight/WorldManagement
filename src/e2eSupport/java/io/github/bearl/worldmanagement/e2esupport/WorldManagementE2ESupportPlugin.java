@@ -17,6 +17,7 @@ import net.luckperms.api.context.MutableContextSet;
 import net.luckperms.api.model.user.User;
 import net.luckperms.api.query.QueryOptions;
 import org.bukkit.Bukkit;
+import org.bukkit.Material;
 import org.bukkit.NamespacedKey;
 import org.bukkit.World;
 import org.bukkit.WorldCreator;
@@ -40,6 +41,8 @@ import org.bukkit.plugin.java.JavaPlugin;
 /** Console-only test fixtures that do not access WorldManagement internals or storage. */
 public final class WorldManagementE2ESupportPlugin extends JavaPlugin implements Listener {
 
+    private static final int MAX_WORLD_MUTATION_ATTEMPTS = 20;
+
     private final Map<UUID, PermissionAttachment> attachments = new ConcurrentHashMap<>();
     private final AtomicReference<WorldLoadFixture> worldLoadFixture = new AtomicReference<>();
     private final AtomicReference<WorldRelocation> worldRelocation = new AtomicReference<>();
@@ -57,8 +60,10 @@ public final class WorldManagementE2ESupportPlugin extends JavaPlugin implements
                 .then(Commands.literal("player")
                     .then(playerRespawnTree())
                     .then(playerPermissionTree())
+                    .then(playerBreakProbeTree())
                     .then(playerLuckPermsTree()))
                 .then(Commands.literal("world")
+                    .then(worldCreateTree())
                     .then(worldLoadRelocateTree()))
                 .build()
         ));
@@ -332,6 +337,43 @@ public final class WorldManagementE2ESupportPlugin extends JavaPlugin implements
                     })));
     }
 
+        private LiteralArgumentBuilder<CommandSourceStack> playerBreakProbeTree() {
+            return Commands.literal("break-probe")
+                .then(Commands.argument("player", StringArgumentType.word())
+                    .executes(context -> {
+                        final String playerName = context.getArgument("player", String.class);
+                        final Player player = Bukkit.getPlayerExact(playerName);
+                        if (player == null) {
+                            context.getSource().getSender().sendPlainMessage(
+                                "WM_E2E_PLAYER_BREAK_UNAVAILABLE player=" + playerName
+                            );
+                            return 0;
+                        }
+                        player.getScheduler().execute(this, () -> {
+                            final var block = player.getWorld().getBlockAt(
+                                player.getLocation().getBlockX(),
+                                player.getLocation().getBlockY(),
+                                player.getLocation().getBlockZ() - 2
+                            );
+                            block.setType(Material.STONE, false);
+                            final BlockBreakEvent event = new BlockBreakEvent(block, player);
+                            Bukkit.getPluginManager().callEvent(event);
+                            if (!event.isCancelled()) {
+                                block.setType(Material.AIR, false);
+                            }
+                            context.getSource().getSender().sendPlainMessage(
+                                "WM_E2E_PLAYER_BREAK_PROBE player=" + player.getName()
+                                    + " world=" + player.getWorld().getKey()
+                                    + " cancelled=" + event.isCancelled()
+                                    + " final=" + block.getType().name()
+                            );
+                        }, () -> context.getSource().getSender().sendPlainMessage(
+                            "WM_E2E_PLAYER_BREAK_RETIRED player=" + playerName
+                        ), 1L);
+                        return 1;
+                    }));
+        }
+
     private LiteralArgumentBuilder<CommandSourceStack> playerLuckPermsTree() {
         return Commands.literal("luckperms")
             .then(Commands.argument("player", StringArgumentType.word())
@@ -383,6 +425,25 @@ public final class WorldManagementE2ESupportPlugin extends JavaPlugin implements
                         }))));
     }
 
+    private LiteralArgumentBuilder<CommandSourceStack> worldCreateTree() {
+        return Commands.literal("create")
+            .then(Commands.argument("world", StringArgumentType.word())
+                .executes(context -> {
+                    final String worldName = StringArgumentType.getString(context, "world");
+                    final NamespacedKey worldKey = NamespacedKey.minecraft(worldName);
+                    scheduleWorldMutation(() -> {
+                        final World world = Bukkit.createWorld(WorldCreator.ofKey(worldKey));
+                        if (world == null) {
+                            getLogger().warning("WM_E2E_WORLD_CREATE_FAILED world=" + worldKey);
+                            return;
+                        }
+                        getLogger().info("WM_E2E_WORLD_CREATED world=" + world.getKey() + " loaded="
+                            + (Bukkit.getWorld(world.getKey()) != null));
+                    }, () -> getLogger().warning("WM_E2E_WORLD_CREATE_FAILED world=" + worldKey));
+                    return 1;
+                }));
+    }
+
     private LiteralArgumentBuilder<CommandSourceStack> worldLoadRelocateTree() {
         return Commands.literal("load-relocate")
             .then(Commands.argument("player", StringArgumentType.word())
@@ -403,25 +464,53 @@ public final class WorldManagementE2ESupportPlugin extends JavaPlugin implements
                             context.getSource().getSender().sendPlainMessage("WM_E2E_WORLD_LOAD_ALREADY_PENDING");
                             return 0;
                         }
-                        final World world;
-                        try {
-                            world = Bukkit.createWorld(WorldCreator.ofKey(worldKey));
-                        } catch (final RuntimeException failure) {
-                            worldLoadFixture.compareAndSet(fixture, null);
-                            throw failure;
-                        }
-                        if (world == null) {
+                        scheduleWorldMutation(() -> {
+                            final World world = Bukkit.createWorld(WorldCreator.ofKey(worldKey));
+                            if (world != null) {
+                                context.getSource().getSender().sendPlainMessage(
+                                    "WM_E2E_WORLD_LOAD_COMPLETE world=" + worldKey
+                                );
+                                return;
+                            }
                             worldLoadFixture.compareAndSet(fixture, null);
                             context.getSource().getSender().sendPlainMessage(
                                 "WM_E2E_WORLD_LOAD_FAILED world=" + worldKey
                             );
-                            return 0;
-                        }
-                        context.getSource().getSender().sendPlainMessage(
-                            "WM_E2E_WORLD_LOAD_COMPLETE world=" + worldKey
-                        );
+                        }, () -> {
+                            worldLoadFixture.compareAndSet(fixture, null);
+                            context.getSource().getSender().sendPlainMessage(
+                                "WM_E2E_WORLD_LOAD_FAILED world=" + worldKey
+                            );
+                        });
                         return 1;
                     })));
+    }
+
+    private void scheduleWorldMutation(final Runnable mutation, final Runnable exhausted) {
+        getServer().getGlobalRegionScheduler().run(
+            this,
+            ignored -> runWorldMutationAttempt(mutation, exhausted, 1)
+        );
+    }
+
+    private void runWorldMutationAttempt(
+        final Runnable mutation,
+        final Runnable exhausted,
+        final int attempt
+    ) {
+        if (!Bukkit.isTickingWorlds()) {
+            mutation.run();
+            return;
+        }
+        if (attempt >= MAX_WORLD_MUTATION_ATTEMPTS) {
+            exhausted.run();
+            return;
+        }
+        getServer().getGlobalRegionScheduler().runDelayed(
+            this,
+            ignored -> runWorldMutationAttempt(mutation, exhausted, attempt + 1),
+            1L
+        );
     }
 
     @Override

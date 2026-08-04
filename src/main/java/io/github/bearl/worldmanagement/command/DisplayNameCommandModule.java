@@ -70,7 +70,7 @@ public final class DisplayNameCommandModule implements WorldManagementCommandMod
             send(sender, "command.display-name.usage");
             return true;
         }
-        final String worldName = validManagedWorld(sender, arguments[2]);
+        final String worldName = validLifecycleWorld(sender, arguments[2]);
         if (worldName == null) {
             return true;
         }
@@ -83,18 +83,20 @@ public final class DisplayNameCommandModule implements WorldManagementCommandMod
         }
         final String actor = actor(sender);
         final CommandMessageSender.Target target = messageSender.capture(sender);
-        service.update(
+        service.updateLifecycle(
             worldName,
             metadata -> metadata.withDisplayName(displayName),
             event(actor, "world.display-name.set", worldName)
         ).whenComplete((result, failure) -> {
-            if (failure == null && result.status() == WorldManagementService.UpdateStatus.UPDATED) {
+            if (failure != null) {
+                respond(target, "command.display-name.failure", "world", worldName);
+            } else if (result.status() == WorldManagementService.UpdateStatus.UPDATED) {
                 messageSender.send(target, messages.component("command.display-name.set-success", Map.of(
                     "world", Component.text(worldName),
                     "display", displayName.component()
                 )));
             } else {
-                respond(target, "command.display-name.failure", "world", worldName);
+                respond(target, updateFailureKey(result.status()), "world", worldName);
             }
         });
         return true;
@@ -109,27 +111,35 @@ public final class DisplayNameCommandModule implements WorldManagementCommandMod
             send(sender, "command.display-name.usage");
             return true;
         }
-        final String worldName = validManagedWorld(sender, arguments[2]);
+        final String worldName = validLifecycleWorld(sender, arguments[2]);
         if (worldName == null) {
             return true;
         }
         final String actor = actor(sender);
         final CommandMessageSender.Target target = messageSender.capture(sender);
-        service.update(
+        service.updateLifecycle(
             worldName,
             metadata -> metadata.resetDisplayName(),
             event(actor, "world.display-name.reset", worldName)
-        ).whenComplete((result, failure) -> respond(
-            target,
-            failure == null && result.status() == WorldManagementService.UpdateStatus.UPDATED
-                ? "command.display-name.reset-success"
-                : "command.display-name.failure",
-            "world", worldName
-        ));
+        ).whenComplete((result, failure) -> respond(target,
+            failure != null
+                ? "command.display-name.failure"
+                : result.status() == WorldManagementService.UpdateStatus.UPDATED
+                    ? "command.display-name.reset-success"
+                    : updateFailureKey(result.status()),
+            "world", worldName));
         return true;
     }
 
-    private String validManagedWorld(final CommandSender sender, final String value) {
+    static String updateFailureKey(final WorldManagementService.UpdateStatus status) {
+        return switch (status) {
+            case NOT_MANAGED -> "command.display-name.not-managed";
+            case NOT_READY -> "command.loading";
+            case UPDATED -> throw new IllegalArgumentException("UPDATED is not a failure status.");
+        };
+    }
+
+    private String validLifecycleWorld(final CommandSender sender, final String value) {
         final String worldName;
         try {
             worldName = nameValidator.requireValidName(value);
@@ -137,7 +147,7 @@ public final class DisplayNameCommandModule implements WorldManagementCommandMod
             send(sender, "command.world-name-invalid");
             return null;
         }
-        if (service.managedWorld(worldName).isEmpty()) {
+        if (service.lifecycleWorld(worldName).isEmpty()) {
             send(sender, "command.display-name.not-managed", "world", worldName);
             return null;
         }

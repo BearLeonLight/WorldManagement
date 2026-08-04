@@ -203,4 +203,41 @@ final class WarpServiceTest {
             executor.shutdown(Duration.ofSeconds(1));
         }
     }
+
+    @Test
+    void rejectsDetachedWorldMutationAndTeleport() {
+        final PluginIoExecutor executor = new PluginIoExecutor("WarpTest");
+        try {
+            final WorldManagementService metadata = new WorldManagementService(
+                executor, new InMemoryWorldMetadataRepository(), new WorldRegistry()
+            );
+            metadata.load().join();
+            final WorldWarp warp = new WorldWarp(
+                "spawn", 0, 64, 0, 0, 0, WarpVisibility.PUBLIC, Set.of(), Set.of(), ""
+            );
+            metadata.adopt("creative", true).join();
+            metadata.update("creative", world -> world.withWarp(warp)).join();
+            metadata.remove("creative").join();
+            final AtomicInteger gatewayCalls = new AtomicInteger();
+            final WarpService service = new WarpService(metadata, new WorldAccessPolicy());
+
+            assertEquals(
+                WorldManagementService.UpdateStatus.NOT_MANAGED,
+                service.set("creative", new WorldWarp(
+                    "other", 1, 65, 1, 0, 0, WarpVisibility.PUBLIC, Set.of(), Set.of(), ""
+                )).join().status()
+            );
+            assertEquals(
+                WarpService.TeleportStatus.NOT_MANAGED,
+                service.teleport(UUID.randomUUID(), "creative", "spawn", true, (player, world, selected) -> {
+                    gatewayCalls.incrementAndGet();
+                    return CompletableFuture.completedFuture(true);
+                }).join().status()
+            );
+            assertEquals(0, gatewayCalls.get());
+            assertEquals(Set.of("spawn"), metadata.metadataWorld("creative").orElseThrow().warps().keySet());
+        } finally {
+            executor.shutdown(Duration.ofSeconds(1));
+        }
+    }
 }

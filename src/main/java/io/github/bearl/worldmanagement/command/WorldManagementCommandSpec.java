@@ -35,14 +35,21 @@ final class WorldManagementCommandSpec {
         this.root = CommandNodeSpec.root(List.of(
             helpTree(),
             lifecycle("create", createTree()),
-            lifecycle("adopt", List.of(words("adopt", route("adopt"), List.of("world"), List.of(noSuggestions())))),
-            lifecycle("load", List.of(words("load", route("load"), List.of("world"), List.of(managedWorlds())))),
+            lifecycle("adopt", List.of(argument("adopt.world", "world", CommandArgumentKind.WORD, List.of(
+                literal("adopt.detached", "--detached", inherit(), List.of())
+                    .executes(new CommandRoute(List.of("adopt"), List.of("--detached")), List.of("world"))
+            )).executes(route("adopt"), List.of("world")))),
+            lifecycle("load", List.of(loadTree())),
             lifecycle("unload", List.of(optionalFallbackTree("unload"))),
             lifecycle("remove", List.of(removeTree())),
             lifecycle("manage", List.of(words("manage", route("manage"), List.of("world"), List.of(detachedWorlds())))),
-            lifecycle("import", List.of(words(
-                "import", route("import"), List.of("world", "environment"), List.of(noSuggestions(), staticSuggestions(ENVIRONMENTS))
-            ))),
+            lifecycle("import", List.of(argument("import.world", "world", CommandArgumentKind.WORD, List.of(
+                argument("import.environment", "environment", CommandArgumentKind.WORD, List.of(
+                    literal("import.detached", "--detached", inherit(), List.of())
+                        .executes(new CommandRoute(List.of("import"), List.of("--detached")), List.of("world", "environment"))
+                )).suggests(staticSuggestions(ENVIRONMENTS))
+                    .executes(route("import"), List.of("world", "environment"))
+            )))),
             lifecycle("delete", List.of(deleteTree())),
             identityTree(),
             displayNameTree(),
@@ -96,7 +103,7 @@ final class WorldManagementCommandSpec {
             "create.options",
             "options",
             new CreateCommandOptionsArgument(suggestions::generatorPlugins),
-            "[--seed <seed>] [--generator <plugin[:id]>]",
+            "[--seed <seed>] [--generator <plugin[:id]>] [--detached]",
             List.of()
         ).executesTyped(route("create"), List.of(
             new CommandArgumentBinding("world", String.class),
@@ -119,8 +126,18 @@ final class WorldManagementCommandSpec {
             argument("delete.fallback", "fallback", CommandArgumentKind.WORD, List.of(
                 literal("delete.fallback.confirm", "confirm", inherit(), List.of())
                     .executes(new CommandRoute(List.of("delete"), List.of("confirm")), List.of("world", "fallback"))
-            ))
-        )).suggests(managedWorlds());
+            )).suggests(fallbackTargets())
+        )).suggests(lifecycleTargets());
+    }
+
+    private CommandNodeSpec loadTree() {
+        return argument("load.world", "world", CommandArgumentKind.WORD, List.of(
+            argument("load.environment", "environment", CommandArgumentKind.WORD, List.of(
+                literal("load.detached", "--detached", inherit(), List.of())
+                    .executes(new CommandRoute(List.of("load"), List.of("--detached")),
+                        List.of("world", "environment"))
+            )).suggests(staticSuggestions(ENVIRONMENTS))
+        )).suggests(lifecycleWorlds()).executes(route("load"), List.of("world"));
     }
 
     private CommandNodeSpec removeTree() {
@@ -129,14 +146,15 @@ final class WorldManagementCommandSpec {
                 literal("remove.purge.confirm", "confirm", inherit(), List.of())
                     .executes(new CommandRoute(List.of("remove"), List.of("purge", "confirm")), List.of("world"))
             ))
-        )).suggests(managedWorlds()).executes(route("remove"), List.of("world"));
+        )).suggests(lifecycleWorlds()).executes(route("remove"), List.of("world"));
     }
 
     private CommandNodeSpec optionalFallbackTree(final String operation) {
         return argument(operation + ".world", "world", CommandArgumentKind.WORD, List.of(
             argument(operation + ".fallback", "fallback", CommandArgumentKind.WORD, List.of())
+                .suggests(fallbackTargets())
                 .executes(route(operation), List.of("world", "fallback"))
-        )).suggests(managedWorlds()).executes(route(operation), List.of("world"));
+        )).suggests(lifecycleTargets()).executes(route(operation), List.of("world"));
     }
 
     private CommandNodeSpec identityTree() {
@@ -193,11 +211,11 @@ final class WorldManagementCommandSpec {
                 argument("display-name.set.world", "world", CommandArgumentKind.WORD, List.of(
                     argument("display-name.set.value", "display-name", CommandArgumentKind.GREEDY_STRING, List.of())
                         .executes(route("display-name", "set"), List.of("world", "display-name"))
-                )).suggests(identityWorlds())
+                )).suggests(displayNameWorlds())
             )),
             literal("display-name.reset", "reset", access(ModuleId.LIFECYCLE, "worldmanagement.command.display-name.reset"), List.of(
                 argument("display-name.reset.world", "world", CommandArgumentKind.WORD, List.of())
-                    .suggests(identityWorlds())
+                    .suggests(displayNameWorlds())
                     .executes(route("display-name", "reset"), List.of("world"))
             ))
         ));
@@ -232,7 +250,7 @@ final class WorldManagementCommandSpec {
         final CommandNodeSpec y = argument(id + ".y", "y", CommandArgumentKind.WORD, List.of(z));
         final CommandNodeSpec x = argument(id + ".x", "x", CommandArgumentKind.WORD, List.of(y));
         return argument(id, "world", CommandArgumentKind.WORD, List.of(x))
-            .suggests(managedWorlds())
+            .suggests(lifecycleWorlds())
             .executes(route, argumentNames);
     }
 
@@ -403,6 +421,40 @@ final class WorldManagementCommandSpec {
 
     private com.mojang.brigadier.suggestion.SuggestionProvider<CommandSourceStack> managedWorlds() {
         return suggestions.provider(SuggestionCatalog.MANAGED_WORLD, (context, catalog) -> catalog.managedWorlds());
+    }
+
+    private com.mojang.brigadier.suggestion.SuggestionProvider<CommandSourceStack> lifecycleWorlds() {
+        return suggestions.provider(
+            SuggestionCatalog.LIFECYCLE_WORLD, (context, catalog) -> catalog.lifecycleWorlds()
+        );
+    }
+
+    private com.mojang.brigadier.suggestion.SuggestionProvider<CommandSourceStack> lifecycleTargets() {
+        return suggestions.provider(
+            SuggestionCatalog.LIFECYCLE_TARGET, (context, catalog) -> catalog.lifecycleTargets()
+        );
+    }
+
+    private com.mojang.brigadier.suggestion.SuggestionProvider<CommandSourceStack> fallbackTargets() {
+        return suggestions.provider(
+            SuggestionCatalog.FALLBACK_TARGET, (context, catalog) -> {
+                final String sourceWorld;
+                try {
+                    sourceWorld = context.getArgument("world", String.class);
+                } catch (final IllegalArgumentException exception) {
+                    return catalog.fallbackTargets();
+                }
+                return catalog.fallbackTargets().stream()
+                    .filter(worldId -> !worldId.equals(sourceWorld))
+                    .toList();
+            }
+        );
+    }
+
+    private com.mojang.brigadier.suggestion.SuggestionProvider<CommandSourceStack> displayNameWorlds() {
+        return suggestions.provider(
+            SuggestionCatalog.DISPLAY_NAME_WORLD, (context, catalog) -> catalog.displayNameWorlds()
+        );
     }
 
     private com.mojang.brigadier.suggestion.SuggestionProvider<CommandSourceStack> detachedWorlds() {

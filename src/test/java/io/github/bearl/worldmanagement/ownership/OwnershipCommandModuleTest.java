@@ -1,6 +1,7 @@
 package io.github.bearl.worldmanagement.ownership;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import io.github.bearl.worldmanagement.audit.AuditPolicy;
 import io.github.bearl.worldmanagement.audit.AuditService;
@@ -22,7 +23,10 @@ import java.util.List;
 import java.util.Set;
 import java.util.UUID;
 import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.TimeUnit;
 import java.util.logging.Logger;
+import net.kyori.adventure.text.Component;
+import net.kyori.adventure.text.serializer.plain.PlainTextComponentSerializer;
 import org.bukkit.Location;
 import org.bukkit.command.CommandSender;
 import org.bukkit.entity.Entity;
@@ -58,6 +62,24 @@ final class OwnershipCommandModuleTest {
             executor.submit(() -> null).join();
 
             assertEquals(TARGET_ID.toString(), metadata.managedWorld("creative").orElseThrow().owner());
+        } finally {
+            executor.shutdown(Duration.ofSeconds(1));
+        }
+    }
+
+    @Test
+    void reportsInvalidRankMutationRaisedOnMetadataWorker() throws Exception {
+        final PluginIoExecutor executor = new PluginIoExecutor("OwnershipCommandModuleTest");
+        try {
+            final WorldManagementService metadata = service(executor);
+            final CapturingSender sender = new CapturingSender();
+            final OwnershipCommandModule module = module(executor, metadata, new OnlinePlayerSnapshot());
+
+            assertTrue(module.execute(sender.sender(),
+                new String[] {"rank", "delete", "creative", WorldMetadata.OWNER_RANK}));
+
+            final String reply = PlainTextComponentSerializer.plainText().serialize(sender.message());
+            assertTrue(reply.contains("世界階級參數無效"), reply);
         } finally {
             executor.shutdown(Duration.ofSeconds(1));
         }
@@ -127,6 +149,34 @@ final class OwnershipCommandModuleTest {
                 default -> defaultValue(method.getReturnType());
             }
         );
+    }
+
+    private static final class CapturingSender {
+        private final CompletableFuture<Component> message = new CompletableFuture<>();
+        private final CommandSender sender = (CommandSender) Proxy.newProxyInstance(
+            CommandSender.class.getClassLoader(),
+            new Class<?>[] {CommandSender.class},
+            (proxy, method, arguments) -> {
+                if (method.getName().equals("hasPermission")) return true;
+                if (method.getName().equals("getName")) return "Administrator";
+                if (method.getName().equals("sendMessage") && arguments != null) {
+                    for (final Object argument : arguments) {
+                        if (argument instanceof Component component) message.complete(component);
+                    }
+                }
+                if (method.getName().equals("equals")) return proxy == arguments[0];
+                if (method.getName().equals("hashCode")) return System.identityHashCode(proxy);
+                return defaultValue(method.getReturnType());
+            }
+        );
+
+        private CommandSender sender() {
+            return sender;
+        }
+
+        private Component message() throws Exception {
+            return message.get(2, TimeUnit.SECONDS);
+        }
     }
 
     private static Object defaultValue(final Class<?> type) {

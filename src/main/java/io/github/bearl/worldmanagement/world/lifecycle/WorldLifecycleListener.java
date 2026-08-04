@@ -105,8 +105,16 @@ public final class WorldLifecycleListener implements Listener {
         );
         final LoadedWorldCatalog.Observation observation = loadedWorldCatalog.loaded(observed);
         loadedWorldObserver.accept(observed);
-        metadataService.classifyLoadedIdentity(identity.snapshot(), identity.lifecycleCapability()).thenRun(() -> {
+        metadataService.classifyLoadedIdentity(identity.snapshot(), identity.lifecycleCapability()).whenComplete((result, failure) -> {
             if (!isCurrent(observation, observed)) {
+                return;
+            }
+            if (failure != null) {
+                dispatcher.executeGlobal(() -> {
+                    if (isCurrent(observation, observed)) {
+                        isolateExistingPlayers.accept(event.getWorld(), observed);
+                    }
+                });
                 return;
             }
             final boolean shouldSynchronize = metadataService.managedWorld(worldName)
@@ -116,10 +124,9 @@ public final class WorldLifecycleListener implements Listener {
             if (shouldSynchronize) {
                 synchronizeIdentity.apply(observation, observed);
             }
-            final boolean shouldIsolate = metadataService.managedWorld(worldName)
-                .map(metadata -> metadata.identityState()
-                    != io.github.bearl.worldmanagement.world.IdentityVerificationState.VERIFIED)
-                .orElse(false);
+            final boolean shouldIsolate = metadataService.resolveRuntimeWorld(
+                observed.identity(), observed.lifecycleCapability()
+            ).status() == io.github.bearl.worldmanagement.world.WorldRuntimeResolution.Status.ISOLATED;
             if (shouldIsolate) {
                 dispatcher.executeGlobal(() -> {
                     if (isCurrent(observation, observed)) {
@@ -152,11 +159,17 @@ public final class WorldLifecycleListener implements Listener {
             .orElse(false);
         if (shouldLoad) {
             dispatcher.executeGlobalLater(NEXT_TICK, () -> {
-                if (loadedWorldCatalog.isCurrent(observation)
-                    && loadedWorldCatalog.findUniqueByWorldId(observed.name()).isEmpty()) {
-                    reconcileWorld.apply(observed.name());
+                try {
+                    if (loadedWorldCatalog.isCurrent(observation)
+                        && loadedWorldCatalog.findUniqueByWorldId(observed.name()).isEmpty()) {
+                        reconcileWorld.apply(observed.name());
+                    }
+                } finally {
+                    loadedWorldCatalog.retire(observation);
                 }
-            });
+            }, () -> loadedWorldCatalog.retire(observation));
+        } else {
+            loadedWorldCatalog.retire(observation);
         }
     }
 

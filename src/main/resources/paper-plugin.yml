@@ -31,13 +31,13 @@ permissions:
     description: Create and register a new world.
     default: op
   worldmanagement.command.load:
-    description: Load a registered world.
+    description: Load a lifecycle world or register safe unknown storage as detached.
     default: op
   worldmanagement.command.unload:
-    description: Unload a registered world.
+    description: Unload a lifecycle world or uniquely loaded unknown runtime world.
     default: op
   worldmanagement.command.remove:
-    description: Detach an unloaded world without deleting its files.
+    description: Detach an active world without unloading it or deleting metadata or files.
     default: op
   worldmanagement.command.manage:
     description: Reattach detached world metadata to management.
@@ -46,7 +46,7 @@ permissions:
     description: Import and register an existing world directory.
     default: op
   worldmanagement.command.delete:
-    description: Unload and permanently delete a registered empty world.
+    description: Confirm a restart-finalized deletion for one lifecycle or uniquely loaded runtime world.
     default: op
   worldmanagement.command.identity.show:
     description: Show persisted and observed world identity state.
@@ -61,10 +61,10 @@ permissions:
     description: Detach non-verified metadata without changing the runtime world or files.
     default: op
   worldmanagement.command.display-name.set:
-    description: Set a managed world's validated MiniMessage display name.
+    description: Set an active or detached world's validated MiniMessage display name.
     default: op
   worldmanagement.command.display-name.reset:
-    description: Reset a managed world's display name to its world ID.
+    description: Reset an active or detached world's display name to its world ID.
     default: op
   worldmanagement.command.warp:
     description: Manage and use world warps.
@@ -100,7 +100,7 @@ permissions:
     description: Bypass protection and entry checks without granting metadata management.
     default: op
   worldmanagement.command.tp:
-    description: Teleport yourself to a managed world's spawn or coordinates.
+    description: Teleport yourself to a verified active or detached world.
     default: op
   worldmanagement.command.tp.others:
     description: Teleport another online player to a managed world.

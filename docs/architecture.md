@@ -16,7 +16,7 @@ WorldManagement 提供可持久化的受管世界 metadata、完整世界 lifecy
 ### 功能模組
 
 - `module/` 提供 `WorldManagementModule`、`ModuleConfiguration` 與 `ModuleManager`，集中管理可啟用的功能範圍。
-- `modules.yml` 可獨立啟用或停用 `lifecycle`、`warp`、`ownership`、`protection`、`storage`。停用後對應 Brigadier command branch 不會提供，protection listener 也不會註冊。
+- `modules.yml` 可獨立啟用或停用 `lifecycle`、`warp`、`ownership`、`protection`、`storage`。停用後對應 Brigadier command branch 不會提供；`protection`只控制entry/build/interact/container治理listener。world identity conflict與`DELETING` runtime的lifecycle isolation listener永遠啟用，不受Protection開關或一般protection bypass影響。
 - Warp command implementation 位於 `warp/WarpCommandModule`；owner、rank 與 access implementation 位於 `ownership/OwnershipCommandModule`。主 command router 僅進行分派。
 
 ### 持久化
@@ -41,7 +41,7 @@ WorldManagement 提供可持久化的受管世界 metadata、完整世界 lifecy
 
 ### Adopt
 
-`adopt` 只為已被 Paper 載入且尚未登錄的世界建立 WorldManagement metadata。它不建立、載入、卸載、重新命名、複製或修改世界資料，也不修改其他世界管理工具的設定。
+`adopt` 只為已被 Paper 載入且尚未登錄的世界建立 WorldManagement metadata。它不建立、載入、卸載、重新命名、複製或修改世界資料，也不修改其他世界管理工具的設定。使用`--detached`時第一次durable create直接寫入DETACHED，不經過ACTIVE中間狀態或第二次remove mutation。
 
 新 metadata 預設為：
 
@@ -58,14 +58,15 @@ WorldManagement 提供可持久化的受管世界 metadata、完整世界 lifecy
 - `create`、`load`、`unload`、`remove`、`import` 與 `delete` 的 Paper world API 操作都在 global scheduler 執行。
 - `create` 或 `import` 若在Paper已產生runtime副作用後回傳`null`或丟例外，coordinator會在global scheduler卸載partial runtime。`create`另以原始creation claim在I/O worker清除本次建立的partial storage；`import`保留既有世界目錄。
 - `import` 只接受 world container 的真實直接子目錄、拒絕符號連結、Windows junction/reparse point與其他特殊filesystem entry，且必須包含 `level.dat`。live world、quarantine root與quarantine entry都以`NOFOLLOW_LINKS` attributes及real-path direct-parent confinement驗證。
-- `load` 與 `unload` 先持久化 `LOADED`/`UNLOADED` desired state，再由 global scheduler 嘗試收斂 runtime；runtime failure 不回滾 intent。卸載先以Paper `World.save(true)`顯式存檔，只有成功後才呼叫`unloadWorld(..., false)`，避免把Paper可能吞下的implicit-save例外誤判為成功。Paper沒有world save completion future，因此save/close仍是global tick上的同步Paper操作，不會移至I/O worker。啟動時及外部 `WorldLoadEvent` 下一 tick 會進行最多三次 bounded reconciliation。
-- `remove` 只接受已卸載且 desired state 為 `UNLOADED` 的 ACTIVE world，將 metadata 改為 `DETACHED`；`manage` 可重新啟用，`remove <world> purge confirm` 才永久清除 detached metadata。
-- `delete` 支援已載入與未載入的受管世界；有玩家時使用 command fallback、configured fallback 或 Paper primary world，以每位玩家的 entity scheduler 非同步傳送。已載入世界的第一次confirmed delete只會顯式存檔、卸載並持久化`UNLOADED` intent；管理員必須再次執行相同confirmed delete，才會進行永久刪除。save/unload成功但metadata更新失敗時，coordinator會回global scheduler重新載入world，保留原始failure並將reload failure附加為suppressed。configured fallback在plugin啟用時必須已載入，否則plugin fail-closed停用。
+- ACTIVE/DETACHED `load` 與 `unload` 先在global scheduler完成runtime收斂與identity驗證，再持久化`LOADED`/`UNLOADED` desired state；失敗時保留原intent。`load <world> <environment> --detached`重用安全import claim，為unknown unloaded storage直接建立DETACHED metadata。unknown loaded unload則只save/relocate/unload runtime，不建立metadata。Paper沒有world save completion future，因此save/close仍是global tick上的同步Paper操作，不會移至I/O worker。啟動時及外部 `WorldLoadEvent` 下一 tick 會進行最多三次 bounded reconciliation；僅ACTIVE世界會自動reconcile。
+- `remove` 接受任何ACTIVE world，不論loaded/unloaded狀態；將metadata改為`DETACHED`。loaded世界保持runtime不變、玩家不移動。DETACHED世界不受Warp/Ownership/Protection治理，也不執行自動reconciliation或identity auto-mutation。`manage`可重新啟用，採用目前runtime狀態作為新desired state；identity不符則拒絕。`remove <world> purge confirm`才永久清除 detached metadata。
+- `delete` 支援ACTIVE、DETACHED及唯一unknown loaded world。unknown target只能從`LoadedWorldCatalog`的exact runtime identity自動建立`DELETE_AUTO` DETACHED metadata；identity collision/replacement或adoption失敗不會觸碰storage。有玩家時command/configured/primary fallback都可為任一不同且唯一loaded runtime world，target identity在teleport後重驗。第一次confirmed delete只save、unload並保存`UNLOADED`；第二次建立transaction-bound quarantine claim並以identity/version/transaction CAS寫入`DELETING`，同一runtime到此停止。startup recovery是永久刪除與metadata purge的唯一owner。
 - 同一世界的 create/load/unload/remove/import/delete 由 keyed `WorldOperationState` gate 互斥；進行中的第二個操作會立即拒絕。
+- `manage`與`purge`也進入同一 keyed gate；Warp/Ownership治理mutation在I/O worker套用前重新確認最新state仍為ACTIVE。display-name使用ACTIVE-or-DETACHED lifecycle mutation並二次檢查最新state。
 - unload/delete 只有在目標仍有玩家時才要求不同且已載入的 fallback；delete 另要求明確 `confirm`。
-- fallback teleport 全數成功且原世界已無玩家後，才回到 global scheduler 卸載；任何排程或 teleport 失敗都會保留世界與 metadata，並回報 players present。
-- 第二次confirmed delete由 global scheduler 執行 nonblocking deletion delay；延遲期滿時若世界被外部重新載入，刪除會中止並保留資料。否則由I/O executor將真實直接子目錄原子移至同filesystem quarantine，回global scheduler再確認未載入並持久化`DELETING` tombstone，完成最後一次reload檢查後由I/O executor永久刪除quarantine，再purge metadata並回覆成功。`WorldLoadEvent`會先標記reload；tombstone寫入前的reload、metadata failure或shutdown cancellation會restore。若tombstone完成後的永久storage delete或metadata purge失敗，會保留`DELETING`狀態並回覆等待重啟，不會restore已進入不可逆階段的資料；plugin下次啟動依tombstone完成剩餘刪除。crash後遺留且沒有`DELETING`的quarantine claim則依其他metadata presence還原或清除；claim與live world path並存時不刪除任一側並fail closed。
-- `/wm tp` 從 immutable metadata 與線上玩家 snapshot 完成 access 判定，實際 world spawn/座標傳送由 player entity scheduler 執行。
+- fallback teleport 全數成功、target仍符合pinned identity且原世界已無玩家後，才回到 global scheduler 卸載；任何排程、teleport或target replacement失敗都會保留source world。
+- 第二次confirmed delete由 global scheduler 執行 nonblocking deletion delay；tombstone前的reload、metadata failure或shutdown cancellation會restore quarantine。durable `DELETING`後不再同runtime永久刪除或restore；plugin下次啟動核對transaction claim後完成永久刪除與metadata purge。若tombstone寫入期間外部插件重載world，該runtime會被隔離並回報需人工檢查；claim與live world path並存、identity/version/transaction不符或ambiguous claim一律fail closed。
+- `/wm tp` 從 immutable lifecycle metadata 與線上玩家 snapshot解析verified target；ACTIVE套用access policy，DETACHED跳過WorldManagement governance，實際傳送仍由player entity scheduler執行。
 
 ### Protection And Warps
 
