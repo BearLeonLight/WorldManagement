@@ -33,6 +33,27 @@ final class LoadedWorldCatalogTest {
     }
 
     @Test
+    void listsSortedUniqueWorldsAndExcludesAmbiguousWorldIds() {
+        final LoadedWorldCatalog catalog = new LoadedWorldCatalog();
+        final WorldRuntimeGateway.LifecycleWorld alpha = world(
+            "minecraft:alpha", "11111111-1111-1111-1111-111111111111"
+        );
+        final WorldRuntimeGateway.LifecycleWorld creative = world(
+            "minecraft:creative", "22222222-2222-2222-2222-222222222222"
+        );
+        final WorldRuntimeGateway.LifecycleWorld externalCreative = world(
+            "external:creative", "33333333-3333-3333-3333-333333333333"
+        );
+        final WorldRuntimeGateway.LifecycleWorld survival = world(
+            "minecraft:survival", "44444444-4444-4444-4444-444444444444"
+        );
+
+        catalog.replaceAll(List.of(survival, creative, alpha, externalCreative));
+
+        assertEquals(List.of(alpha, survival), catalog.uniqueWorlds());
+    }
+
+    @Test
     void exactUnloadInvalidatesThePriorGenerationWithoutRemovingAReplacement() {
         final LoadedWorldCatalog catalog = new LoadedWorldCatalog();
         final WorldRuntimeGateway.LifecycleWorld original = world(

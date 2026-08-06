@@ -17,8 +17,14 @@ import io.github.bearl.worldmanagement.core.DiagnosticPrivacy;
 import io.github.bearl.worldmanagement.config.DebugArea;
 import io.github.bearl.worldmanagement.config.DebugLevel;
 import io.github.bearl.worldmanagement.hook.LuckPermsHook;
+import io.github.bearl.worldmanagement.hook.MiniPlaceholdersProvider;
 import io.github.bearl.worldmanagement.hook.MultiverseWorldTrackingHook;
+import io.github.bearl.worldmanagement.hook.PlaceholderApiProvider;
+import io.github.bearl.worldmanagement.hook.PlaceholderDependencyListener;
+import io.github.bearl.worldmanagement.hook.PlaceholderHookManager;
+import io.github.bearl.worldmanagement.hook.PlayerWorldContextSnapshot;
 import io.github.bearl.worldmanagement.hook.WorldTrackingHook;
+import io.github.bearl.worldmanagement.hook.WorldPlaceholderResolver;
 import io.github.bearl.worldmanagement.command.WorldManagementCommand;
 import io.github.bearl.worldmanagement.command.BrigadierWorldManagementCommand;
 import io.github.bearl.worldmanagement.command.CommandAuthorizationSnapshot;
@@ -93,6 +99,8 @@ public final class WorldManagementPlugin extends JavaPlugin {
     private BrigadierWorldManagementCommand paperCommand;
     private OnlinePlayerSnapshot onlinePlayers;
     private CommandAuthorizationSnapshot commandAuthorizations;
+    private PlayerWorldContextSnapshot playerWorldContexts;
+    private PlaceholderHookManager placeholderHooks;
     private AuditService auditService;
     private CommandMessageSender messageSender;
     private ModuleManager moduleManager;
@@ -363,7 +371,36 @@ public final class WorldManagementPlugin extends JavaPlugin {
         final ConfigService configService = new ConfigService(configuration);
         final LuckPermsHook luckPermsHook = LuckPermsHook.detect(configuration.hooks().luckPermsEnabled());
         final MultiverseHookConnection multiverseHook = connectMultiverseHook(configuration);
-        logHooks(configuration, luckPermsHook, multiverseHook.status());
+        final WorldPlaceholderResolver placeholderResolver = new WorldPlaceholderResolver(
+            worldManagementService::snapshot,
+            reference -> loadedWorldCatalog.findExactUnique(reference).isPresent(),
+            playerId -> playerWorldContexts.currentWorld(playerId)
+        );
+        this.playerWorldContexts = new PlayerWorldContextSnapshot();
+        getServer().getOnlinePlayers().forEach(playerWorldContexts::capture);
+        getServer().getPluginManager().registerEvents(playerWorldContexts, this);
+        final String placeholderAuthor = getPluginMeta().getAuthors().isEmpty()
+            ? getName()
+            : String.join(", ", getPluginMeta().getAuthors());
+        final String pluginVersion = getPluginMeta().getVersion();
+        this.placeholderHooks = new PlaceholderHookManager(
+            getServer().getPluginManager()::isPluginEnabled,
+            () -> PlaceholderApiProvider.connect(placeholderResolver, placeholderAuthor, pluginVersion),
+            () -> MiniPlaceholdersProvider.connect(placeholderResolver, placeholderAuthor, pluginVersion),
+            failure -> getLogger().log(Level.WARNING, "Could not disconnect a placeholder provider.", failure)
+        );
+        final PlaceholderHookManager.Status placeholderStatus = placeholderHooks.connect(configuration.hooks());
+        getServer().getPluginManager().registerEvents(
+            new PlaceholderDependencyListener(
+                pluginName -> {
+                    final String status = placeholderHooks.connect(pluginName, configuration.hooks());
+                    getLogger().info(() -> "%s hook: %s".formatted(pluginName, status));
+                },
+                placeholderHooks::disconnect
+            ),
+            this
+        );
+        logHooks(configuration, luckPermsHook, multiverseHook.status(), placeholderStatus);
         final DestinationWorldPermissionResolver destinationPermissions = new DestinationWorldPermissionResolver(
             loadedWorldCatalog,
             luckPermsHook.cachedPermissions()
@@ -406,7 +443,8 @@ public final class WorldManagementPlugin extends JavaPlugin {
             messageSender,
             onlinePlayers,
             diagnostics,
-            teleportBypassTokens
+            teleportBypassTokens,
+            loadedWorldCatalog
         );
         paperCommand.initialize(commandHandler, moduleManager, worldManagementService);
         this.lifecycleReconciler = new WorldLifecycleReconciler(
@@ -522,6 +560,12 @@ public final class WorldManagementPlugin extends JavaPlugin {
     public void onDisable() {
         if (commandAuthorizations != null) {
             commandAuthorizations.beginShutdown();
+        }
+        if (placeholderHooks != null) {
+            placeholderHooks.close();
+        }
+        if (playerWorldContexts != null) {
+            playerWorldContexts.clear();
         }
         teleportBypassTokens.clear();
         if (shutdownCoordinator == null) {
@@ -747,7 +791,8 @@ public final class WorldManagementPlugin extends JavaPlugin {
     private void logHooks(
         final PluginConfiguration configuration,
         final LuckPermsHook luckPermsHook,
-        final String multiverseStatus
+        final String multiverseStatus,
+        final PlaceholderHookManager.Status placeholderStatus
     ) {
         consoleOutput.info(startupDiagnostics.sectionComponent("Hooks"));
         if (!configuration.hooks().luckPermsEnabled()) {
@@ -758,6 +803,12 @@ public final class WorldManagementPlugin extends JavaPlugin {
             )));
         }
         consoleOutput.info(startupDiagnostics.detailComponent("Multiverse-Core: " + multiverseStatus));
+        consoleOutput.info(startupDiagnostics.detailComponent(
+            "PlaceholderAPI: " + placeholderStatus.placeholderApi()
+        ));
+        consoleOutput.info(startupDiagnostics.detailComponent(
+            "MiniPlaceholders: " + placeholderStatus.miniPlaceholders()
+        ));
     }
 
     private static String auditBackend(final PluginConfiguration configuration) {

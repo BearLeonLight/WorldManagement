@@ -157,12 +157,34 @@ public final class PluginConfigurationLoader {
     private HookConfiguration loadHooks(final Path dataDirectory) throws IOException {
         final Path hooksFile = dataDirectory.toAbsolutePath().normalize().resolve("hooks.yml");
         if (Files.notExists(hooksFile)) {
-            Files.writeString(hooksFile, "luckperms:\n  enabled: true\nmultiverse:\n  enabled: true\n", StandardCharsets.UTF_8);
+            Files.writeString(hooksFile, String.join("\n",
+                "luckperms:",
+                "  enabled: true",
+                "multiverse:",
+                "  enabled: true",
+                "placeholderapi:",
+                "  enabled: true",
+                "miniplaceholders:",
+                "  enabled: true",
+                ""
+            ), StandardCharsets.UTF_8);
         }
         final YamlDocument hooks = YamlDocument.create(new ByteArrayInputStream(Files.readAllBytes(hooksFile)));
+        boolean updated = false;
+        for (final String path : java.util.List.of("placeholderapi.enabled", "miniplaceholders.enabled")) {
+            if (!hooks.contains(path)) {
+                hooks.set(path, true);
+                updated = true;
+            }
+        }
+        if (updated) {
+            hooks.save(hooksFile.toFile());
+        }
         return new HookConfiguration(
             hooks.getBoolean("luckperms.enabled", true),
-            hooks.getBoolean("multiverse.enabled", true)
+            hooks.getBoolean("multiverse.enabled", true),
+            hooks.getBoolean("placeholderapi.enabled", true),
+            hooks.getBoolean("miniplaceholders.enabled", true)
         );
     }
 

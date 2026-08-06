@@ -2,3 +2,7 @@ luckperms:
   enabled: true
 multiverse:
   enabled: true
+placeholderapi:
+  enabled: true
+miniplaceholders:
+  enabled: true

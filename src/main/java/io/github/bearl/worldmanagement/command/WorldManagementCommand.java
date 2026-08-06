@@ -10,10 +10,12 @@ import io.github.bearl.worldmanagement.config.DebugArea;
 import io.github.bearl.worldmanagement.protection.TeleportBypassTokens;
 import io.github.bearl.worldmanagement.core.WorldThreadDispatcher;
 import io.github.bearl.worldmanagement.world.lifecycle.WorldLifecycleCoordinator;
+import io.github.bearl.worldmanagement.world.lifecycle.LoadedWorldCatalog;
 import io.github.bearl.worldmanagement.world.lifecycle.WorldRuntimeGateway;
 import io.github.bearl.worldmanagement.world.WorldManagementService;
 import io.github.bearl.worldmanagement.world.DisplayNameValidator;
 import io.github.bearl.worldmanagement.world.WorldMetadata;
+import io.github.bearl.worldmanagement.world.WorldManagementState;
 import io.github.bearl.worldmanagement.world.WorldWarp;
 import io.github.bearl.worldmanagement.world.WarpVisibility;
 import io.github.bearl.worldmanagement.world.WorldAccessPolicy;
@@ -79,6 +81,7 @@ public final class WorldManagementCommand {
     private final OnlinePlayerSnapshot onlinePlayers;
     private final DiagnosticLogger diagnostics;
     private final TeleportBypassTokens teleportBypassTokens;
+    private final LoadedWorldCatalog loadedWorlds;
 
     public WorldManagementCommand(
         final WorldManagementService service,
@@ -98,7 +101,7 @@ public final class WorldManagementCommand {
     ) {
         this(service, nameValidator, threadDispatcher, lifecycleService, warpService, teleportGateway, worldTeleportGateway, auditService,
             warpEnabled, maximumCustomRanks, migrationService, messages, messageSender, onlinePlayers, null,
-            new TeleportBypassTokens());
+            new TeleportBypassTokens(), new LoadedWorldCatalog());
     }
 
     public WorldManagementCommand(
@@ -120,7 +123,7 @@ public final class WorldManagementCommand {
     ) {
         this(service, nameValidator, threadDispatcher, lifecycleService, warpService, teleportGateway, worldTeleportGateway, auditService,
             warpEnabled, maximumCustomRanks, migrationService, messages, messageSender, onlinePlayers, diagnostics,
-            new TeleportBypassTokens());
+            new TeleportBypassTokens(), new LoadedWorldCatalog());
     }
 
     public WorldManagementCommand(
@@ -139,7 +142,8 @@ public final class WorldManagementCommand {
         final CommandMessageSender messageSender,
         final OnlinePlayerSnapshot onlinePlayers,
         final DiagnosticLogger diagnostics,
-        final TeleportBypassTokens teleportBypassTokens
+        final TeleportBypassTokens teleportBypassTokens,
+        final LoadedWorldCatalog loadedWorlds
     ) {
         this.service = Objects.requireNonNull(service, "service");
         this.nameValidator = Objects.requireNonNull(nameValidator, "nameValidator");
@@ -159,6 +163,7 @@ public final class WorldManagementCommand {
         this.onlinePlayers = Objects.requireNonNull(onlinePlayers, "onlinePlayers");
         this.diagnostics = diagnostics;
         this.teleportBypassTokens = Objects.requireNonNull(teleportBypassTokens, "teleportBypassTokens");
+        this.loadedWorlds = Objects.requireNonNull(loadedWorlds, "loadedWorlds");
         final WorldManagementCommandModule warpModule = new WarpCommandModule(
             service, nameValidator, threadDispatcher, warpService, teleportGateway, warpEnabled, onlinePlayers, messages, messageSender
         );
@@ -777,8 +782,19 @@ public final class WorldManagementCommand {
             return true;
         }
 
-        if (arguments.length > 2 || arguments.length == 2 && !arguments[1].equalsIgnoreCase("detached")) {
+        if (arguments.length > 2 || arguments.length == 2
+            && !arguments[1].equalsIgnoreCase("detached")
+            && !arguments[1].equalsIgnoreCase("all")) {
             send(sender, "command.root.usage");
+            return true;
+        }
+        if (arguments.length == 2 && arguments[1].equalsIgnoreCase("all")) {
+            final List<WorldListMessageRenderer.LoadedWorldEntry> worlds = loadedWorldEntries();
+            if (worlds.isEmpty()) {
+                send(sender, "command.list.all-empty");
+                return true;
+            }
+            messageSender.send(sender, listMessages.renderLoaded(worlds));
             return true;
         }
         final boolean detached = arguments.length == 2;
@@ -789,6 +805,27 @@ public final class WorldManagementCommand {
         }
         messageSender.send(sender, listMessages.render(worlds, detached));
         return true;
+    }
+
+    List<WorldListMessageRenderer.LoadedWorldEntry> loadedWorldEntries() {
+        return loadedWorlds.uniqueWorlds().stream()
+            .map(world -> new WorldListMessageRenderer.LoadedWorldEntry(world, loadedStatus(world)))
+            .toList();
+    }
+
+    private WorldListMessageRenderer.LoadedStatus loadedStatus(
+        final WorldRuntimeGateway.LifecycleWorld world
+    ) {
+        return service.metadataWorld(world.name())
+            .filter(metadata -> VerifiedWorldRef.from(metadata)
+                .filter(world.reference()::equals)
+                .isPresent())
+            .map(metadata -> metadata.managementState() == WorldManagementState.ACTIVE
+                ? WorldListMessageRenderer.LoadedStatus.ACTIVE
+                : metadata.managementState() == WorldManagementState.DETACHED
+                    ? WorldListMessageRenderer.LoadedStatus.DETACHED
+                    : WorldListMessageRenderer.LoadedStatus.UNKNOWN)
+            .orElse(WorldListMessageRenderer.LoadedStatus.UNKNOWN);
     }
 
     private DeleteRequest parseDeleteRequest(final String[] arguments) {

@@ -97,6 +97,7 @@ final class WorldManagementServiceTest {
             assertEquals(WorldManagementService.AdoptionStatus.ADOPTED, first.status());
             assertEquals(WorldManagementService.AdoptionStatus.ALREADY_MANAGED, second.status());
             assertTrue(service.managedWorlds().stream().anyMatch(world -> world.worldName().equals("creative")));
+            assertEquals(first.metadata(), service.snapshot().byId().get("creative"));
         } finally {
             executor.shutdown(Duration.ofSeconds(1));
         }

@@ -2,7 +2,7 @@
 
 WorldManagement 是面向 Paper 伺服器的世界管理插件，目標是提供安全的世界生命週期管理、世界內所有權與保護，以及 Warp 管理，同時避免在遊戲執行緒進行阻塞 I/O。
 
-> 專案目前提供安全的受管世界 lifecycle、world identity replacement隔離與恢復、fallback player relocation、快取式保護、Warp、owner/rank/access 管理、audit policy，以及 YAML、SQLite、MySQL/MariaDB metadata provider。LuckPerms 與 Multiverse-Core 5 為可選整合；LuckPerms 提供目的世界 context 的 cached Warp permission，Multiverse-Core hook 則在停止管理或永久刪除前同步解除其世界追蹤。
+> 專案目前提供安全的受管世界 lifecycle、world identity replacement隔離與恢復、fallback player relocation、快取式保護、Warp、owner/rank/access 管理、audit policy，以及 YAML、SQLite、MySQL/MariaDB metadata provider。LuckPerms、Multiverse-Core 5、PlaceholderAPI與MiniPlaceholders為可選整合；兩套placeholder provider以短namespace `wm`公開只讀世界snapshot。
 
 ## 系統需求
 
@@ -27,7 +27,7 @@ WorldManagement 是面向 Paper 伺服器的世界管理插件，目標是提供
 .\gradlew.bat cleanWorldManagementE2eCache
 ```
 
-`cleanE2eDependencies`會移除console與player E2E的`node_modules`；後續E2E task會依既有流程重新執行`npm ci`。`cleanWorldManagementE2eCache`只會移除Gradle user home的`caches/worldmanagement/`，也就是本專案下載並驗證的Paper、Via與LuckPerms artifacts；它不會刪除一般Gradle dependency cache、wrapper或相鄰`TestServer/`的JAR。
+`cleanE2eDependencies`會移除console與player E2E的`node_modules`；後續E2E task會依既有流程重新執行`npm ci`。`cleanWorldManagementE2eCache`只會移除Gradle user home的`caches/worldmanagement/`，也就是本專案下載並驗證的Paper、Via、LuckPerms與placeholder provider artifacts；它不會刪除一般Gradle dependency cache、wrapper或相鄰`TestServer/`的JAR。
 
 除了單元測試，`paperJarSmokeTest` 會在隔離的 `build/paper-jar-smoke/` 目錄啟動實際 Paper server、安裝 shadow JAR、確認 WorldManagement 載入 metadata、執行 `wm list` 後正常停止。無參數執行時會優先使用相鄰 `TestServer/` 目錄最新修改的 `paper-*.jar`；找不到本機 JAR 時，會從 Paper 官方 Fill v3 API 下載與 `paperApiVersionDeclaration` 相符的版本，驗證 SHA-256，並快取於 Gradle user home。
 
@@ -42,9 +42,17 @@ WorldManagement 是面向 Paper 伺服器的世界管理插件，目標是提供
 .\gradlew.bat paperJarSmokeTest -PpaperServerJar="E:\Minecraft\paper.jar"
 ```
 
+同時提供兩套正式plugin JAR時，smoke task也會要求兩個`wm` provider狀態為`available`，並分別透過PAPI與MiniPlaceholders的官方parse command驗證global與指定世界placeholder。兩個參數必須成對提供；artifact來源與checksum須由呼叫端固定：
+
+```powershell
+.\gradlew.bat paperJarSmokeTest `
+	-PplaceholderApiPluginJar="E:\Minecraft\PlaceholderAPI-2.12.3.jar" `
+	-PminiPlaceholdersPluginJar="E:\Minecraft\MiniPlaceholders-Paper-3.2.0.jar"
+```
+
 測試完整伺服器輸出會保留在 `build/paper-jar-smoke/latest.log`，供啟動失敗時檢查。一般 `check` 不會隱式下載或啟動伺服器，確保離線單元測試仍可執行。
 
-不需要玩家身分或遊戲內狀態的 Paper runtime 指令，使用獨立的控制台矩陣。此 task 不啟動 Mineflayer，也不安裝 Via；它會安裝固定且SHA-256驗證的Multiverse-Core 5.7.3，驗證32個console runtime leaves、70個console command outcomes、Help與巢狀錯誤導引、unknown runtime unload/delete、同runtime永久刪除、MV remove/delete untracking與重啟持久性、root/module aliases、world storage、metadata、identity recovery、quarantine、migration target與正常shutdown。可用`-PmultiversePluginJar=<path>`覆寫MV JAR：
+不需要玩家身分或遊戲內狀態的 Paper runtime 指令，使用獨立的控制台矩陣。此 task 不啟動 Mineflayer，也不安裝 Via；它會安裝固定且SHA-256驗證的Multiverse-Core 5.7.3，驗證33個console runtime leaves、72個console command outcomes、Help與巢狀錯誤導引、所有loaded runtime world清單、unknown runtime unload/delete、同runtime永久刪除、MV remove/delete untracking與重啟持久性、root/module aliases、world storage、metadata、identity recovery、quarantine、migration target與正常shutdown。可用`-PmultiversePluginJar=<path>`覆寫MV JAR：
 
 ```powershell
 .\gradlew.bat paperConsoleCommandTest
@@ -83,7 +91,7 @@ Paper JAR 選擇參數與 `paperJarSmokeTest` 相同。Via fallback 預設動態
 /wm tp self survival
 ```
 
-create flags可任意排序且不得重複。`--generate-bonus-chest`與`--force-spawn-position`互斥；generator/biome provider無法由啟用中的插件解析時會安全拒絕，不會退回vanilla provider。generator與biome provider reference會保存至metadata，供後續managed load重新解析；其餘選項是交給Paper的建立時資料。MV的alias、game mode、difficulty、auto-load、world price與portal設定不屬於世界生成輸入，不由此指令模擬。
+create flags可任意排序且不得重複。completion逐token提供尚未使用的flag；選取`--generator`後只在下一個token補全provider，不會把`--generator Terra:normal --seed 8675309`組成單一候選。`--generate-bonus-chest`與`--force-spawn-position`互斥；generator/biome provider無法由啟用中的插件解析時會安全拒絕，不會退回vanilla provider。generator與biome provider reference會保存至metadata，供後續managed load重新解析；其餘選項是交給Paper的建立時資料。MV的alias、game mode、difficulty、auto-load、world price與portal設定不屬於世界生成輸入，不由此指令模擬。
 
 將已由Paper或其他世界工具載入的世界納入管理，以及將磁碟上具備`level.dat`的安全世界目錄匯入：
 
@@ -113,6 +121,8 @@ create flags可任意排序且不得重複。`--generate-bonus-chest`與`--force
 
 `unload`與`delete`的world completion會列出ACTIVE、DETACHED及目前唯一載入的unknown world；每次指令仍只操作一個指定世界，不是批次刪除。unknown loaded world執行unload時不建立metadata；執行delete時會先從exact runtime identity建立`DELETE_AUTO` DETACHED metadata，再走相同的安全刪除流程。
 
+`/wm list all`列出目前所有唯一載入的runtime world，並標示`ACTIVE`、`DETACHED`或`UNKNOWN`。只有runtime identity與metadata完全相符時才會標示ACTIVE或DETACHED；replacement、identity衝突及無metadata的世界都顯示UNKNOWN。此清單只讀事件維護的不可變snapshot，不讀取Bukkit world、YAML或資料庫。
+
 對仍載入的世界執行`delete`時，第一次會搬離玩家、存檔並卸載；管理員確認狀態後必須再次執行相同指令。第二次會先要求Multiverse-Core停止追蹤，接著將storage移入quarantine、寫入`DELETING` tombstone，並在同一runtime永久刪除storage與metadata。若plugin已進入shutdown，durable tombstone與quarantine會保留，由下一次啟動recovery接續：
 
 ```text
@@ -130,6 +140,22 @@ create flags可任意排序且不得重複。`--generate-bonus-chest`與`--force
 ```
 
 完整權限、狀態前提與所有語法見[指令](docs/commands.md)。
+
+## Placeholders
+
+安裝並在`hooks.yml`啟用PlaceholderAPI或MiniPlaceholders後，WorldManagement會向各自API註冊`wm` provider。常用語法如下：
+
+```text
+%wm_managed_world_count%
+%wm_world_display_name:creative_world%
+%wm_current_world_id%
+
+<wm_managed_world_count>
+<wm_world_display_name:creative_world>
+<wm_current_world_id>
+```
+
+MiniPlaceholders使用`<wm_key>`，不是`<miniplaceholders:...>`。完整global、world與current-world key清單、空值規則及執行緒契約見[設定與 metadata](docs/configuration.md)。兩套provider只讀immutable snapshot；PlaceholderAPI輸出純文字，MiniPlaceholders則為Adventure Component。WorldManagement目前不在`messages_<locale>.yml`內執行任意第三方expansion。
 
 ## 啟動診斷
 
@@ -159,6 +185,8 @@ WorldManagement 在 `INFO` 層級輸出精簡的啟動階段摘要：設定與 s
 [WorldManagement]     Hooks
 [WorldManagement]         LuckPerms: available
 [WorldManagement]         Multiverse-Core: available
+[WorldManagement]         PlaceholderAPI: available
+[WorldManagement]         MiniPlaceholders: available
 [WorldManagement]     Services
 [WorldManagement]         Command service: /wm Brigadier tree initialized
 [WorldManagement]         Suggestion service: metadata and online-player snapshots initialized
@@ -199,6 +227,7 @@ WorldManagement 在 `INFO` 層級輸出精簡的啟動階段摘要：設定與 s
 - WorldManagement 專用 `OFF/BASIC/VERBOSE` 診斷、area allowlist、Paper console 與 bounded rotating file sink
 - 可選 LuckPerms Warp外部權限整合；以已載入且identity相符的目的Bukkit world建立cached permission context，玩家名稱仍只由線上快照解析，WorldManagement rank不映射為LuckPerms group
 - 可選 Multiverse-Core 5 lifecycle整合；`remove`與第二次confirmed `delete`在改變WorldManagement狀態前使用MV公開API解除追蹤、保留Bukkit runtime並驗證`worlds.yml`持久化，失敗時fail closed
+- 可選PlaceholderAPI與MiniPlaceholders provider；共用`wm` namespace與immutable snapshot resolver，提供global、指定世界及玩家目前世界placeholder
 - `messages_zh_TW.yml` 使用 Adventure MiniMessage，集中管理全部指令回覆、可選共用前綴與逐語意訊息 key
 - 玩家與 RCON 接收 Adventure Component；本機控制台以固定 ANSI 16 色呈現啟動摘要與指令回覆，Paper 檔案 log 保持純文字
 - 自訂 locale 缺少的 key 會從 JAR 內建 template 自動補入並保存；無效 key 只在執行時回退，不覆寫管理員內容

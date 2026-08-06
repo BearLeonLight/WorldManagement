@@ -88,6 +88,10 @@ final class WorldManagementCommandSpecTest {
             .filter(node -> node.id().equals("load"))
             .findFirst()
             .orElseThrow();
+        final CommandNodeSpec list = specification.root().children().stream()
+            .filter(node -> node.id().equals("list"))
+            .findFirst()
+            .orElseThrow();
 
         assertEquals(List.of(
             "/wm create <world> <environment> <world-type>",
@@ -107,6 +111,11 @@ final class WorldManagementCommandSpecTest {
             "/wm load <world>",
             "/wm load <world> <environment> --detached"
         ), load.usageLines("wm"));
+        assertEquals(List.of(
+            "/wm list",
+            "/wm list detached",
+            "/wm list all"
+        ), list.usageLines("wm"));
     }
 
     @Test

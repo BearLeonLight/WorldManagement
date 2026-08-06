@@ -16,6 +16,14 @@ dependencies:
       load: BEFORE
       required: false
       join-classpath: true
+    PlaceholderAPI:
+      load: BEFORE
+      required: false
+      join-classpath: true
+    MiniPlaceholders:
+      load: BEFORE
+      required: false
+      join-classpath: true
 permissions:
   worldmanagement.command.help:
     description: View command help for commands available to the sender.

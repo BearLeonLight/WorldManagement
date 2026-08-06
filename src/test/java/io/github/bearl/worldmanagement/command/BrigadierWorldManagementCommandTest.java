@@ -119,6 +119,27 @@ final class BrigadierWorldManagementCommandTest {
     }
 
     @Test
+    void createOptionCompletionReplacesOnlyTheCurrentToken() {
+        final String input = "wm create creative NORMAL FLAT --seed Alpha123 --gen";
+        final Suggestions suggestions = suggestions(input);
+
+        assertEquals(input.lastIndexOf("--gen"), suggestions.getRange().getStart());
+        assertEquals(input.length(), suggestions.getRange().getEnd());
+        assertEquals(
+            List.of("--generate-bonus-chest", "--generator", "--generator-settings"),
+            suggestions.getList().stream().map(suggestion -> suggestion.getText()).sorted().toList()
+        );
+        assertEquals(
+            "wm create creative NORMAL FLAT --seed Alpha123 --generator",
+            suggestions.getList().stream()
+                .filter(suggestion -> suggestion.getText().equals("--generator"))
+                .findFirst()
+                .orElseThrow()
+                .apply(input)
+        );
+    }
+
+    @Test
     void createProviderCompletionKeepsGeneratorAndBiomeSnapshotsSeparate() {
         final SuggestionCatalog catalog = new SuggestionCatalog(new OnlinePlayerSnapshot());
         catalog.replaceGeneratorPlugins(List.of("Terra"));

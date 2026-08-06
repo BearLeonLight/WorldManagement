@@ -59,7 +59,9 @@ final class WorldManagementCommandSpec {
             storageTree("storage", route("storage")),
             literal("list", "list", access(ModuleId.LIFECYCLE, LIFECYCLE_PERMISSION + "list"), List.of(
                 literal("list.detached", "detached", inherit(), List.of())
-                    .executes(new CommandRoute(List.of("list"), List.of("detached")), List.of())
+                    .executes(new CommandRoute(List.of("list"), List.of("detached")), List.of()),
+                literal("list.all", "all", inherit(), List.of())
+                    .executes(new CommandRoute(List.of("list"), List.of("all")), List.of())
             )).executes(route("list"), List.of())
         ));
     }

@@ -16,11 +16,13 @@
 
 此指令只建立 WorldManagement metadata，不會改變世界檔案、Paper 載入狀態、玩家位置或 Multiverse 等外部工具設定。`DETACHED`仍可使用 lifecycle load/unload/delete，但不套用 Warp、Ownership、Protection、自動 reconciliation 或 identity auto-mutation。
 
-## `/wm list [detached]`
+## `/wm list [detached|all]`
 
 權限：`worldmanagement.command.list`，預設 OP。
 
-列出 WorldManagement 記憶體快取中的受管世界；加入 `detached` 可列出已停止管理、但仍保留 metadata 的世界。每個世界使用 `<world-id或顯示名稱> - <NORMAL|NETHER|THE_END|CUSTOM>` 格式逐行顯示；設定顯示名稱後以該名稱為主，游標停留時顯示不可變的 world ID。此指令不讀取 YAML、SQL 或 Bukkit world。
+無參數時列出 WorldManagement 記憶體快取中的ACTIVE世界；加入`detached`可列出已停止管理、但仍保留metadata的世界。這兩種清單使用`<world-id或顯示名稱> - <NORMAL|NETHER|THE_END|CUSTOM>`格式逐行顯示；設定顯示名稱後以該名稱為主，游標停留時顯示不可變的world ID。
+
+加入`all`時列出事件維護的不可變snapshot中所有唯一loaded runtime worlds，格式為`<world-id> - <environment> - <ACTIVE|DETACHED|UNKNOWN>`。只有runtime identity與metadata完全相符時才標示ACTIVE或DETACHED；replacement、identity衝突及無metadata世界一律標示UNKNOWN。三種模式都不讀取YAML、SQL或可變Bukkit world。
 
 ## 訊息輸出
 
@@ -32,7 +34,7 @@ Domain rejection 使用 typed status 映射至固定 locale key；例如 not man
 
 ## World Lifecycle
 
-- `/wm create <world> <NORMAL|NETHER|THE_END> <NORMAL|FLAT|AMPLIFIED|LARGE_BIOMES> [--seed <seed>] [--generator <plugin[:id]>] [--generator-settings <json>] [--no-structures] [--generate-bonus-chest] [--biome <plugin[:id]>] [--force-spawn-position <x,y,z[,yaw,pitch]>] [--detached]`：environment與world type為必填。flags可任意排序、各只能出現一次；已輸入的flag不再出現在completion。seed只接受ASCII英數，數字直接作為`long`，文字使用Minecraft相容的Java字串hash。generator settings可用引號保留含空白JSON；`--no-structures`停用結構、`--generate-bonus-chest`產生獎勵箱、`--biome`解析plugin biome provider，forced spawn可提供座標及選用yaw/pitch。bonus chest與forced spawn不可並用。generator與biome completion只讀主執行緒發布的有效plugin不可變snapshot，仍可手動輸入`plugin:id`；provider無效、停用、回傳null或拋例外時fail closed。generator與biome provider reference都會寫入metadata，供後續managed load重新解析；seed、generator settings、structures、bonus chest與forced spawn是建立時交給Paper或寫入世界資料的選項。`--detached`建立世界但不套用Warp/Ownership/Protection治理。MV的alias、game mode、difficulty、auto-load、world price與portal設定不屬於世界生成參數，因此不在此語法內。
+- `/wm create <world> <NORMAL|NETHER|THE_END> <NORMAL|FLAT|AMPLIFIED|LARGE_BIOMES> [--seed <seed>] [--generator <plugin[:id]>] [--generator-settings <json>] [--no-structures] [--generate-bonus-chest] [--biome <plugin[:id]>] [--force-spawn-position <x,y,z[,yaw,pitch]>] [--detached]`：environment與world type為必填。flags可任意排序、各只能出現一次；completion逐token只提供尚未使用的flag，選取value option後在下一個token提供對應value，不會把多個options合併成單一suggestion。seed只接受ASCII英數，數字直接作為`long`，文字使用Minecraft相容的Java字串hash。generator settings可用引號保留含空白JSON；`--no-structures`停用結構、`--generate-bonus-chest`產生獎勵箱、`--biome`解析plugin biome provider，forced spawn可提供座標及選用yaw/pitch。bonus chest與forced spawn不可並用。generator與biome completion只讀主執行緒發布的有效plugin不可變snapshot，仍可手動輸入`plugin:id`；provider無效、停用、回傳null或拋例外時fail closed。generator與biome provider reference都會寫入metadata，供後續managed load重新解析；seed、generator settings、structures、bonus chest與forced spawn是建立時交給Paper或寫入世界資料的選項。`--detached`建立世界但不套用Warp/Ownership/Protection治理。MV的alias、game mode、difficulty、auto-load、world price與portal設定不屬於世界生成參數，因此不在此語法內。
 - `/wm load <world>`、`/wm load <world> <NORMAL|NETHER|THE_END> --detached`：既有語法載入ACTIVE或DETACHED metadata world；新語法只接受尚無metadata、未載入且具有安全storage claim的world，載入後直接保存DETACHED metadata。`--detached`缺少environment時不可執行。
 - `/wm unload <world> [fallback]`：ACTIVE/DETACHED在成功save/unload後持久化`UNLOADED` desired state；失敗時保留原intent。目前已載入但unknown的world也可執行runtime-only unload，不建立或修改metadata。卸載先以Paper `World.save(true)`顯式存檔，成功後才以`save=false`卸載。fallback可為任一不同、唯一且已載入的runtime world，identity在傳送前後都會重驗。
 - `/wm remove <world>`：先要求啟用中的Multiverse-Core 5 hook解除外部追蹤並確認`worlds.yml`已保存，再將ACTIVE metadata標記為DETACHED。世界不需先卸載；已載入時玩家留在原地、runtime保持不變，僅停用Warp/Ownership/Protection與自動reconciliation。MV API或保存失敗時不改變WorldManagement metadata或runtime。

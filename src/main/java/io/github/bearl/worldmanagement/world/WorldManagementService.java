@@ -90,6 +90,10 @@ public final class WorldManagementService {
         return ready.get();
     }
 
+    public RegistrySnapshot snapshot() {
+        return registry.snapshot();
+    }
+
     public List<WorldMetadata> managedWorlds() {
         return registry.snapshots().stream()
             .filter(world -> world.managementState() == WorldManagementState.ACTIVE)

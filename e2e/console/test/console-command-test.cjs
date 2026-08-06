@@ -218,6 +218,7 @@ async function runConsoleMatrix (paper, logPath, serverRoot) {
 
   await command(paper, logPath, 'wm list', '受管世界：', 'wm list')
   await command(paper, logPath, 'wm list detached', '目前沒有已停止管理的世界。', 'wm list detached')
+  await command(paper, logPath, 'wm list all', 'overworld - NORMAL - UNKNOWN', 'wm list all')
   await command(paper, logPath, 'worldmanager list', '受管世界：', 'wm list')
   await command(paper, logPath, 'wmwarp list warpfixture', '傳送點：obsolete', 'wm warp list <world>')
   await command(paper, logPath, 'wm warp delete warpfixture obsolete', '傳送點 obsolete 已刪除', 'wm warp delete <world> <name>')
@@ -295,6 +296,9 @@ async function runConsoleMatrix (paper, logPath, serverRoot) {
   await assertAuditActions(serverRoot, 'displayfixture', ['world.display-name.reset'])
 
   await command(paper, logPath, 'wm adopt overworld', '世界 overworld 已加入管理', 'wm adopt <world>')
+  await command(
+    paper, logPath, 'wm list all', 'overworld - NORMAL - ACTIVE', 'wm list all', false
+  )
 
   await feedback(paper, logPath, 'wme2e world create adoptdetached', 'WM_E2E_WORLD_CREATED world=minecraft:adoptdetached loaded=true')
   await command(

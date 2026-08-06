@@ -104,6 +104,8 @@ command:
         description: "列出受管世界。"
         detached:
           description: "列出已停止管理的世界。"
+        all:
+          description: "列出目前所有已載入的 runtime 世界與管理狀態。"
   syntax:
     missing: "<prefix><red>指令缺少必要參數。</red>"
     invalid: "<prefix><red>指令包含無效的子指令或參數。</red>"
@@ -261,6 +263,9 @@ command:
     result: "<aqua>受管世界：</aqua>"
     detached-empty: "<prefix><gray>目前沒有已停止管理的世界。</gray>"
     detached-result: "<aqua>已停止管理世界：</aqua>"
+    all-empty: "<prefix><gray>目前沒有已載入的世界。</gray>"
+    all-result: "<aqua>目前已載入世界：</aqua>"
+    all-entry: "<world><gray> - </gray><environment><gray> - </gray><status>"
     entry: "<name><gray> - </gray><type>"
     world-id-hover: "<gray>世界 ID：</gray><white><world></white>"
   tp:

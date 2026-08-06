@@ -167,11 +167,77 @@ luckperms:
   enabled: true
 multiverse:
   enabled: true
+placeholderapi:
+  enabled: true
+miniplaceholders:
+  enabled: true
 ```
 
 `luckperms.enabled`控制optional LuckPerms API整合。服務可用時，Warp `required-permission`使用目的Bukkit world context的LuckPerms cached permission；服務缺失、停用或查詢失敗時，非空外部permission會fail closed。一般command permission與protection bypass仍由Paper/Bukkit判斷。
 
 `multiverse.enabled`控制optional Multiverse-Core 5 lifecycle整合。未安裝MV時不影響操作；明確停用時WorldManagement不會解除MV追蹤，管理員必須自行避免MV重新載入。啟用且MV已安裝時，`remove`與第二次confirmed `delete`會先使用MV公開API移除world、保留Bukkit runtime並確認`worlds.yml`保存；API unavailable、remove或save失敗會fail closed。該MV API同步觸發Bukkit event與YAML保存，依thread affinity必須在Paper global scheduler執行，是已知的第三方同步I/O限制。`locale`決定使用的`messages_<locale>.yml`。
+
+`placeholderapi.enabled`與`miniplaceholders.enabled`分別控制WorldManagement是否向對應的optional plugin註冊`wm` provider。舊版`hooks.yml`缺少這兩個key時，啟動會補上`enabled: true`，不覆寫既有值。依賴未安裝或開關停用不會阻止WorldManagement啟用；啟動摘要會分別顯示`available`、`not installed`、`disabled by hooks.yml`、`API unavailable`、`identifier collision`或`registration failed`。依賴在runtime啟用時會嘗試註冊，停用時會解除WorldManagement自己持有的provider；插件shutdown也會清理註冊。
+
+兩套provider共用短namespace `wm`：
+
+```text
+PlaceholderAPI:    %wm_managed_world_count%
+                   %wm_world_display_name:creative_world%
+                   %wm_current_world_id%
+
+MiniPlaceholders:  <wm_managed_world_count>
+                   <wm_world_display_name:creative_world>
+                   <wm_current_world_id>
+```
+
+MiniPlaceholders會直接將expansion name與key組合成`<wm_key>`；沒有`<miniplaceholders:...>`前綴。WorldManagement不會縮短其他插件擁有的expansion name。
+
+不需世界或玩家context的global placeholders：
+
+| key | 輸出 |
+| --- | --- |
+| `managed_world_count` | `ACTIVE` metadata數量 |
+| `detached_world_count` | `DETACHED` metadata數量 |
+
+需要`:world_id`參數的world placeholders：
+
+| key | 輸出 |
+| --- | --- |
+| `world_exists` | metadata是否存在，`true`或`false` |
+| `world_display_name` | 驗證後的世界顯示名稱 |
+| `world_environment` | 小寫environment |
+| `world_management_state` | 小寫management state |
+| `world_desired_state` | 小寫desired load state |
+| `world_identity_state` | 小寫identity verification state |
+| `world_lifecycle_capability` | 小寫lifecycle capability |
+| `world_runtime_loaded` | exact verified runtime是否唯一載入，`true`或`false` |
+| `world_access_mode` | 小寫access mode |
+| `world_rank_system_enabled` | `true`或`false` |
+| `world_custom_rank_count` | 不含`OWNER`與`GUEST`的自訂rank數量 |
+| `world_warp_count` | Warp數量 |
+
+需要玩家audience context的current-world placeholders：
+
+| key | 輸出 |
+| --- | --- |
+| `current_world_managed` | 玩家是否位於exact verified、唯一載入的`ACTIVE`世界 |
+| `current_world_id` | 目前受管世界ID |
+| `current_world_display_name` | 目前受管世界顯示名稱 |
+| `current_world_environment` | 小寫environment |
+| `current_world_management_state` | 小寫management state |
+| `current_world_desired_state` | 小寫desired load state |
+| `current_world_identity_state` | 小寫identity verification state |
+| `current_world_access_mode` | 小寫access mode |
+| `current_world_is_owner` | 玩家是否為世界owner，`true`或`false` |
+| `current_world_rank_id` | owner為`OWNER`，否則為已指派rank或`GUEST` |
+| `current_world_rank_display_name` | 上述rank的顯示名稱 |
+
+Placeholder key大小寫不敏感；`world_id`保持原值並依metadata的canonical ID精確比對。world key缺少參數、global/current key多出參數或未知key視為格式不符。指定世界不存在時，`world_exists`回傳`false`，其他world placeholders回傳空值。玩家context缺失、玩家不在exact verified且唯一載入的`ACTIVE`世界、或audience沒有UUID時，`current_world_managed`與`current_world_is_owner`回傳`false`，其他current-world placeholders回傳空值。PlaceholderAPI對格式不符或未知key回傳`null`，由呼叫端保留或處理原placeholder；MiniPlaceholders對已註冊但參數/context不符的tag插入空Component。
+
+PlaceholderAPI只輸出純文字，因此顯示名稱中的MiniMessage格式不會變成PAPI輸出語法。MiniPlaceholders的world display name保留`DisplayNameValidator`允許的安全Adventure Component格式；其他值以literal Component輸出。callback只讀immutable `RegistrySnapshot`、`LoadedWorldCatalog`與join/world-change/quit事件維護的玩家世界identity snapshot，不執行YAML、JDBC、檔案I/O、future等待或mutable Bukkit world/player存取。metadata cache以snapshot instance失效，大小受已登錄世界數限制。
+
+若其他插件已註冊`wm` identifier，WorldManagement會fail closed保留既有provider，不覆寫或在cleanup時解除對方註冊。WorldManagement目前只向兩套API提供自己的snapshot-only placeholders；`messages_<locale>.yml`不會同步解析任意第三方PAPI或MiniPlaceholders expansion，避免第三方callback在Paper delivery thread執行阻塞工作或把外部字串重新解析為MiniMessage互動標籤。
 
 ## MiniMessage 訊息
 

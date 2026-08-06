@@ -4,6 +4,7 @@ import io.github.bearl.worldmanagement.core.MessageService;
 import io.github.bearl.worldmanagement.world.DisplayNameValidator;
 import io.github.bearl.worldmanagement.world.WorldEnvironment;
 import io.github.bearl.worldmanagement.world.WorldMetadata;
+import io.github.bearl.worldmanagement.world.lifecycle.WorldRuntimeGateway;
 import java.util.ArrayList;
 import java.util.Comparator;
 import java.util.List;
@@ -33,6 +34,23 @@ final class WorldListMessageRenderer {
         return List.copyOf(result);
     }
 
+    List<Component> renderLoaded(final List<LoadedWorldEntry> worlds) {
+        final List<Component> result = new ArrayList<>(worlds.size() + 1);
+        result.add(messages.component("command.list.all-result"));
+        worlds.stream()
+            .sorted(Comparator.comparing(entry -> entry.world().name()))
+            .map(entry -> messages.component("command.list.all-entry", Map.of(
+                "world", Component.text(entry.world().name()),
+                "environment", Component.text(
+                    entry.world().identity().environment().name(),
+                    environmentColor(entry.world().identity().environment())
+                ),
+                "status", Component.text(entry.status().name(), entry.status().color())
+            )))
+            .forEach(result::add);
+        return List.copyOf(result);
+    }
+
     private Component entry(final WorldMetadata metadata) {
         Component displayName = displayNames.validate(metadata.displayName()).component();
         if (!metadata.displayName().equals(metadata.worldName())) {
@@ -53,5 +71,29 @@ final class WorldListMessageRenderer {
             case THE_END -> NamedTextColor.AQUA;
             case CUSTOM -> NamedTextColor.GOLD;
         };
+    }
+
+    record LoadedWorldEntry(WorldRuntimeGateway.LifecycleWorld world, LoadedStatus status) {
+
+        LoadedWorldEntry {
+            Objects.requireNonNull(world, "world");
+            Objects.requireNonNull(status, "status");
+        }
+    }
+
+    enum LoadedStatus {
+        ACTIVE(NamedTextColor.GREEN),
+        DETACHED(NamedTextColor.YELLOW),
+        UNKNOWN(NamedTextColor.GRAY);
+
+        private final NamedTextColor color;
+
+        LoadedStatus(final NamedTextColor color) {
+            this.color = color;
+        }
+
+        NamedTextColor color() {
+            return color;
+        }
     }
 }

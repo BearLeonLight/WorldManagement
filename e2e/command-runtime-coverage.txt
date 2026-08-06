@@ -46,3 +46,4 @@ PLAYER_RUNTIME wm ownership access <world> <operation> <value>
 CONSOLE_RUNTIME wm storage migrate <source> <target> confirm
 CONSOLE_RUNTIME wm list
 CONSOLE_RUNTIME wm list detached
+CONSOLE_RUNTIME wm list all

@@ -172,6 +172,7 @@ fun org.gradle.api.tasks.Exec.configureMultiverseEnvironment() {
 repositories {
     maven("https://repo.papermc.io/repository/maven-public/")
     maven("https://repo.onarandombox.com/multiverse-releases")
+    maven("https://repo.helpch.at/releases/")
     mavenCentral()
 }
 
@@ -193,6 +194,10 @@ dependencies {
     testImplementation("net.luckperms:api:${providers.gradleProperty("luckPermsApiVersion").get()}")
     compileOnly("org.mvplugins.multiverse.core:multiverse-core:${providers.gradleProperty("multiverseCoreVersion").get()}")
     multiverseE2eRuntime("org.mvplugins.multiverse.core:multiverse-core:${providers.gradleProperty("multiverseCoreVersion").get()}")
+    compileOnly("me.clip:placeholderapi:${providers.gradleProperty("placeholderApiVersion").get()}")
+    testImplementation("me.clip:placeholderapi:${providers.gradleProperty("placeholderApiVersion").get()}")
+    compileOnly("io.github.miniplaceholders:miniplaceholders-api:${providers.gradleProperty("miniPlaceholdersVersion").get()}")
+    testImplementation("io.github.miniplaceholders:miniplaceholders-api:${providers.gradleProperty("miniPlaceholdersVersion").get()}")
     compileOnly("net.kyori:adventure-text-serializer-ansi:5.2.0")
     compileOnly("net.kyori:ansi:1.1.1")
     testRuntimeOnly("net.kyori:adventure-text-serializer-ansi:5.2.0")
@@ -330,7 +335,7 @@ tasks {
 
     register<Delete>("cleanWorldManagementE2eCache") {
         group = "build setup"
-        description = "Removes WorldManagement's checksum-verified Paper, Via, and LuckPerms E2E downloads."
+        description = "Removes WorldManagement's checksum-verified Paper, Via, LuckPerms, and placeholder test downloads."
         delete(File(gradle.gradleUserHomeDir, "caches/worldmanagement"))
     }
 
@@ -342,6 +347,17 @@ tasks {
 
         doLast {
             val serverJar = resolvePaperServerJar()
+            val placeholderApiJar = providers.gradleProperty("placeholderApiPluginJar").orNull?.let(::file)
+            val miniPlaceholdersJar = providers.gradleProperty("miniPlaceholdersPluginJar").orNull?.let(::file)
+            if ((placeholderApiJar == null) != (miniPlaceholdersJar == null)) {
+                throw GradleException(
+                    "placeholderApiPluginJar and miniPlaceholdersPluginJar must be provided together."
+                )
+            }
+            listOfNotNull(placeholderApiJar, miniPlaceholdersJar).forEach { jar ->
+                if (!jar.isFile) throw GradleException("Placeholder plugin JAR does not exist: ${jar.absolutePath}")
+            }
+            val verifyPlaceholderProviders = placeholderApiJar != null
 
             val smokeDirectory = layout.buildDirectory.dir("paper-jar-smoke").get().asFile
             if (serverJar.toPath().toAbsolutePath().normalize().startsWith(smokeDirectory.toPath().toAbsolutePath().normalize())) {
@@ -360,6 +376,12 @@ tasks {
             copy {
                 from(shadowJar.get().archiveFile)
                 into(pluginsDirectory)
+            }
+            if (verifyPlaceholderProviders) {
+                copy {
+                    from(placeholderApiJar, miniPlaceholdersJar)
+                    into(pluginsDirectory)
+                }
             }
             File(smokeDirectory, "eula.txt").writeText("eula=true\n")
             File(smokeDirectory, "server.properties").writeText(
@@ -415,13 +437,40 @@ tasks {
                     throw GradleException("Paper JAR smoke test did not fully enable WorldManagement. See ${logFile.absolutePath}")
                 }
 
+                if (verifyPlaceholderProviders) {
+                    val startupLog = logFile.readText()
+                    val unavailableProvider = listOf(
+                        "PlaceholderAPI: available",
+                        "MiniPlaceholders: available"
+                    ).firstOrNull { marker -> !startupLog.contains(marker) }
+                    if (unavailableProvider != null) {
+                        throw GradleException(
+                            "Paper JAR smoke test did not register '$unavailableProvider'. See ${logFile.absolutePath}"
+                        )
+                    }
+                }
+
                 val output = process.outputStream.bufferedWriter()
                 output.write("wm list\n")
+                if (verifyPlaceholderProviders) {
+                    output.write("papi parse --null PAPI-WM=%wm_managed_world_count%=END\n")
+                    output.write("papi parse --null PAPI-WORLD=%wm_world_exists:missing%=END\n")
+                    output.write("miniplaceholders parse --null MINI-WM=<wm_managed_world_count>=END\n")
+                    output.write("miniplaceholders parse --null MINI-WORLD=<wm_world_exists:missing>=END\n")
+                }
                 output.flush()
                 val commandDeadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(10)
                 var commandHandled = false
                 while (process.isAlive && System.nanoTime() < commandDeadline) {
-                    if (logFile.readText().contains("目前沒有受 WorldManagement 管理的世界。")) {
+                    val commandLog = logFile.readText()
+                    val wmListHandled = commandLog.contains("目前沒有受 WorldManagement 管理的世界。")
+                    val placeholdersHandled = !verifyPlaceholderProviders || listOf(
+                        "PAPI-WM=0=END",
+                        "PAPI-WORLD=false=END",
+                        "MINI-WM=0=END",
+                        "MINI-WORLD=false=END"
+                    ).all(commandLog::contains)
+                    if (wmListHandled && placeholdersHandled) {
                         commandHandled = true
                         break
                     }
@@ -429,7 +478,9 @@ tasks {
                 }
                 if (!commandHandled) {
                     output.close()
-                    throw GradleException("Paper JAR smoke test could not execute wm list. See ${logFile.absolutePath}")
+                    throw GradleException(
+                        "Paper JAR smoke test did not observe every command result. See ${logFile.absolutePath}"
+                    )
                 }
 
                 output.use {

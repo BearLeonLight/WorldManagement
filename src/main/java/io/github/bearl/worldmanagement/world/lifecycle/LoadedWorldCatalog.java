@@ -61,6 +61,12 @@ public final class LoadedWorldCatalog {
             .toList();
     }
 
+    public java.util.List<WorldRuntimeGateway.LifecycleWorld> uniqueWorlds() {
+        return state.get().uniqueWorldsById().values().stream()
+            .sorted(java.util.Comparator.comparing(WorldRuntimeGateway.LifecycleWorld::name))
+            .toList();
+    }
+
     public boolean isCurrent(final Observation observation) {
         final Observation requiredObservation = Objects.requireNonNull(observation, "observation");
         return state.get().generations().getOrDefault(requiredObservation.worldId(), 0L)

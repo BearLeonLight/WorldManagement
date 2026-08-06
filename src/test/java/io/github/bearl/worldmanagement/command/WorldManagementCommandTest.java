@@ -24,6 +24,7 @@ import io.github.bearl.worldmanagement.world.LifecycleCapability;
 import io.github.bearl.worldmanagement.world.WorldManagementService;
 import io.github.bearl.worldmanagement.world.WorldRegistry;
 import io.github.bearl.worldmanagement.world.lifecycle.PaperWorldStorageGateway;
+import io.github.bearl.worldmanagement.world.lifecycle.LoadedWorldCatalog;
 import io.github.bearl.worldmanagement.world.lifecycle.WorldDirectoryRemover;
 import io.github.bearl.worldmanagement.world.lifecycle.WorldLifecycleCoordinator;
 import io.github.bearl.worldmanagement.world.lifecycle.WorldRuntimeGateway;
@@ -82,6 +83,50 @@ final class WorldManagementCommandTest {
             MigrationStatus.TARGET_NOT_CONFIGURED));
         assertEquals("command.storage.target-not-empty", WorldManagementCommand.storageResultKey(
             MigrationStatus.TARGET_NOT_EMPTY));
+    }
+
+    @Test
+    void loadedWorldListClassifiesOnlyExactMetadataIdentities() {
+        final PluginIoExecutor executor = new PluginIoExecutor("CommandLoadedListTest");
+        try {
+            final WorldManagementService metadata = new WorldManagementService(
+                executor, new InMemoryWorldMetadataRepository(), new WorldRegistry()
+            );
+            metadata.load().join();
+            final WorldIdentitySnapshot active = identity(
+                "active", "11111111-1111-1111-1111-111111111111"
+            );
+            final WorldIdentitySnapshot detached = identity(
+                "detached", "22222222-2222-2222-2222-222222222222"
+            );
+            final WorldIdentitySnapshot replaced = identity(
+                "replaced", "33333333-3333-3333-3333-333333333333"
+            );
+            metadata.adopt(active, LifecycleCapability.MANAGED, Optional.empty(), true, null).join();
+            metadata.adopt(detached, LifecycleCapability.MANAGED, Optional.empty(), true, null).join();
+            metadata.adopt(replaced, LifecycleCapability.MANAGED, Optional.empty(), true, null).join();
+            metadata.remove("detached").join();
+
+            final LoadedWorldCatalog loadedWorlds = new LoadedWorldCatalog();
+            loadedWorlds.replaceAll(java.util.List.of(
+                lifecycleWorld(active),
+                lifecycleWorld(detached),
+                lifecycleWorld(identity("replaced", "44444444-4444-4444-4444-444444444444")),
+                lifecycleWorld(identity("unknown", "55555555-5555-5555-5555-555555555555"))
+            ));
+            final WorldManagementCommand command = command(metadata, executor, loadedWorlds);
+
+            assertEquals(
+                java.util.List.of(
+                    "active:ACTIVE", "detached:DETACHED", "replaced:UNKNOWN", "unknown:UNKNOWN"
+                ),
+                command.loadedWorldEntries().stream()
+                    .map(entry -> entry.world().name() + ':' + entry.status().name())
+                    .toList()
+            );
+        } finally {
+            executor.shutdown(Duration.ofSeconds(1));
+        }
     }
 
     @Test
@@ -282,6 +327,55 @@ final class WorldManagementCommandTest {
         java.nio.file.Files.writeString(data.resolve("minecraft").resolve("world_gen_settings.dat"), "worldgen");
         java.nio.file.Files.writeString(data.resolve("paper").resolve("metadata.dat"), "metadata");
         java.nio.file.Files.writeString(data.resolve("paper").resolve("level_overrides.dat"), "overrides");
+    }
+
+    private WorldManagementCommand command(
+        final WorldManagementService metadata,
+        final PluginIoExecutor executor,
+        final LoadedWorldCatalog loadedWorlds
+    ) {
+        final ImmediateDispatcher dispatcher = new ImmediateDispatcher();
+        final WorldLifecycleCoordinator lifecycle = new WorldLifecycleCoordinator(
+            new EmptyRuntimeGateway(), metadata, true, executor,
+            new PaperWorldStorageGateway(
+                temporaryDirectory, temporaryDirectory, new WorldNameValidator(),
+                new WorldDirectoryRemover(new WorldNameValidator())
+            ),
+            Duration.ZERO, dispatcher, Optional.empty()
+        );
+        final MessageService messages = MessageService.load(
+            temporaryDirectory, "zh_TW", java.util.Objects.requireNonNull(
+                WorldManagementCommandTest.class.getResourceAsStream("/messages_zh_TW.yml")
+            ), ignored -> { }
+        );
+        return new WorldManagementCommand(
+            metadata, new WorldNameValidator(), dispatcher, lifecycle,
+            new WarpService(metadata, new WorldAccessPolicy()),
+            (playerId, worldName, warp) -> CompletableFuture.completedFuture(false),
+            (playerId, world, coordinates) -> CompletableFuture.completedFuture(false),
+            new AuditService(
+                executor, event -> { }, Logger.getLogger("CommandLoadedListTest"), AuditPolicy.BEST_EFFORT
+            ),
+            true, 5,
+            new StorageMigrationService(
+                executor, StorageConfiguration.defaults(), Map.of(), temporaryDirectory
+            ),
+            messages, new CommandMessageSender(dispatcher), new OnlinePlayerSnapshot(), null,
+            new io.github.bearl.worldmanagement.protection.TeleportBypassTokens(), loadedWorlds
+        );
+    }
+
+    private static WorldIdentitySnapshot identity(final String worldId, final String uuid) {
+        return new WorldIdentitySnapshot(
+            "minecraft:" + worldId, UUID.fromString(uuid),
+            io.github.bearl.worldmanagement.world.WorldEnvironment.NORMAL, 42L, true
+        );
+    }
+
+    private static WorldRuntimeGateway.LifecycleWorld lifecycleWorld(
+        final WorldIdentitySnapshot identity
+    ) {
+        return new WorldRuntimeGateway.LifecycleWorld(identity, LifecycleCapability.MANAGED);
     }
 
     private static CommandSender permittedSender() {

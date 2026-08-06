@@ -10,6 +10,7 @@ import io.github.bearl.worldmanagement.world.LifecycleCapability;
 import io.github.bearl.worldmanagement.world.WorldEnvironment;
 import io.github.bearl.worldmanagement.world.WorldIdentitySnapshot;
 import io.github.bearl.worldmanagement.world.WorldMetadata;
+import io.github.bearl.worldmanagement.world.lifecycle.WorldRuntimeGateway;
 import java.io.InputStream;
 import java.nio.file.Path;
 import java.util.List;
@@ -58,6 +59,29 @@ final class WorldListMessageRendererTest {
 
         assertEquals("creative - NORMAL", plain(entry));
         assertNull(entry.children().getFirst().hoverEvent());
+    }
+
+    @Test
+    void rendersLoadedRuntimeWorldsWithManagementStatus() {
+        final WorldRuntimeGateway.LifecycleWorld active = new WorldRuntimeGateway.LifecycleWorld(
+            new WorldIdentitySnapshot(
+                "minecraft:creative",
+                UUID.fromString("11111111-1111-1111-1111-111111111111"),
+                WorldEnvironment.NORMAL,
+                42L,
+                true
+            ),
+            LifecycleCapability.MANAGED
+        );
+
+        final List<Component> rendered = new WorldListMessageRenderer(messages()).renderLoaded(List.of(
+            new WorldListMessageRenderer.LoadedWorldEntry(
+                active, WorldListMessageRenderer.LoadedStatus.ACTIVE
+            )
+        ));
+
+        assertEquals("目前已載入世界：", plain(rendered.get(0)));
+        assertEquals("creative - NORMAL - ACTIVE", plain(rendered.get(1)));
     }
 
     private MessageService messages() {

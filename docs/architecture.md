@@ -78,6 +78,15 @@ WorldManagement 提供可持久化的受管世界 metadata、完整世界 lifecy
 - LuckPerms以optional dependency載入。hooks.yml啟用且API存在時，`DestinationWorldPermissionResolver`先要求`LoadedWorldCatalog`中有唯一、identity相符的目的world，再由`LuckPermsCachedPermissionLookup`複製玩家目前的contextual `QueryOptions`、只替換`world`context並查cached permission。API/user/context缺失或查詢異常時fail closed；不執行I/O、load或離線lookup。一般command permission與protection bypass仍由Paper/Bukkit處理，玩家名稱只由線上快照解析，WorldManagement rank永不映射為LuckPerms group。
 - Multiverse-Core 5同樣是optional dependency。啟用hook且API可用時，`WorldTrackingHook`在global scheduler呼叫`WorldManager.removeWorld(RemoveWorldOptions...unloadBukkitWorld(false))`，只解除MV追蹤而保留Bukkit runtime；之後再明確檢查`saveWorldsConfig()`，因MV remove流程本身不會將內部save failure暴露為remove failure。保存失敗會保留retryable pending persistence並阻止WorldManagement lifecycle mutation。MV API同步觸發Bukkit event與YAML保存，因此不得移到I/O worker；這是第三方API在Paper thread上的已知同步I/O限制。
 
+### Placeholder Providers
+
+- PlaceholderAPI與MiniPlaceholders是獨立optional provider，兩者都註冊短namespace `wm`，共用`WorldPlaceholderResolver`的global、指定世界與audience key catalog。PAPI公開`%wm_key%`及`%wm_world_key:world_id%`純文字；MiniPlaceholders公開`<wm_key>`及`<wm_world_key:world_id>` Adventure Component。
+- resolver每次只讀`WorldManagementService.snapshot()`回傳的immutable `RegistrySnapshot`、`LoadedWorldCatalog.findExactUnique`及`PlayerWorldContextSnapshot`。後者只在join、world change、quit與啟動backfill時於合法Paper context擷取UUID、world ID、registry key與world UUID；第三方callback不保留或讀取mutable Bukkit/Paper物件。
+- metadata-derived lookup cache以`RegistrySnapshot` reference identity失效，預先建立world ID map及驗證後顯示名稱Component；cache大小受metadata世界數限制。callback不做YAML、JDBC、filesystem I/O、future等待、scheduler dispatch或離線玩家lookup。
+- current-world值只接受玩家snapshot、ACTIVE metadata、VERIFIED identity與唯一loaded runtime四者完全一致；stale/replacement/unloaded/detached context一律fail closed為false或空值。PAPI只輸出plain text，MiniPlaceholders只讓已由`DisplayNameValidator`驗證的世界顯示名稱保留Component格式。
+- `PlaceholderHookManager`在metadata ready後註冊，監聽dependency enable/disable並在shutdown清理。provider註冊先檢查既有`wm` identifier；collision不覆寫，cleanup也只在registry仍指向同一instance時解除。
+- locale message rendering刻意不作為任意第三方placeholder consumer。PAPI與MiniPlaceholders expansion callback均同步執行，開放無限制consumer會把外部I/O或鎖延遲帶入Paper delivery thread；PAPI字串若重新送入MiniMessage parser也會形成標籤注入面。
+
 ### Audit
 
 - 成功的 adopt、metadata lifecycle、owner/rank/access 與 Warp set/delete/trust 操作會產生 audit event。SQL provider 將 event 與 metadata mutation 原子提交；YAML provider 在 metadata 原子檔案寫入後以非阻塞方式追加 `plugins/WorldManagement/audit.jsonl`。

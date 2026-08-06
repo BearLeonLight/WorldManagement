@@ -31,24 +31,46 @@ final class PluginConfigurationLoaderTest {
         assertTrue(configuration.debug().areas().containsAll(java.util.EnumSet.allOf(DebugArea.class)));
         assertTrue(configuration.debug().consoleEnabled());
         assertTrue(configuration.debug().fileEnabled());
-                assertTrue(configuration.hooks().luckPermsEnabled());
-                assertTrue(configuration.hooks().multiverseEnabled());
+        assertTrue(configuration.hooks().luckPermsEnabled());
+        assertTrue(configuration.hooks().multiverseEnabled());
+        assertTrue(configuration.hooks().placeholderApiEnabled());
+        assertTrue(configuration.hooks().miniPlaceholdersEnabled());
     }
 
-        @Test
-        void loadsOptionalHookEnablement() throws IOException {
-                Files.writeString(temporaryDirectory.resolve("hooks.yml"), """
-                        luckperms:
-                            enabled: false
-                        multiverse:
-                            enabled: false
-                        """);
+    @Test
+    void loadsOptionalHookEnablement() throws IOException {
+        Files.writeString(temporaryDirectory.resolve("hooks.yml"), """
+                luckperms:
+                    enabled: false
+                multiverse:
+                    enabled: false
+                placeholderapi:
+                    enabled: false
+                miniplaceholders:
+                    enabled: false
+                """);
 
-                final var hooks = new PluginConfigurationLoader().load(temporaryDirectory).hooks();
+        final var hooks = new PluginConfigurationLoader().load(temporaryDirectory).hooks();
 
-                assertTrue(!hooks.luckPermsEnabled());
-                assertTrue(!hooks.multiverseEnabled());
-        }
+        assertTrue(!hooks.luckPermsEnabled());
+        assertTrue(!hooks.multiverseEnabled());
+        assertTrue(!hooks.placeholderApiEnabled());
+        assertTrue(!hooks.miniPlaceholdersEnabled());
+    }
+
+    @Test
+    void addsMissingPlaceholderHookSettingsToExistingConfiguration() throws IOException {
+        final Path hooksFile = temporaryDirectory.resolve("hooks.yml");
+        Files.writeString(hooksFile, "luckperms:\n  enabled: true\nmultiverse:\n  enabled: true\n");
+
+        final var hooks = new PluginConfigurationLoader().load(temporaryDirectory).hooks();
+
+        assertTrue(hooks.placeholderApiEnabled());
+        assertTrue(hooks.miniPlaceholdersEnabled());
+        final String updated = Files.readString(hooksFile);
+        assertTrue(updated.contains("placeholderapi:"));
+        assertTrue(updated.contains("miniplaceholders:"));
+    }
 
     @Test
     void replacesAnExistingBlankConfigurationWithDefaults() throws IOException {
