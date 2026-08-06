@@ -349,13 +349,20 @@ tasks {
             val serverJar = resolvePaperServerJar()
             val placeholderApiJar = providers.gradleProperty("placeholderApiPluginJar").orNull?.let(::file)
             val miniPlaceholdersJar = providers.gradleProperty("miniPlaceholdersPluginJar").orNull?.let(::file)
+            val multiverseSmokeJar = providers.gradleProperty("smokeMultiversePluginJar").orNull?.let(::file)
+            val expectedMultiverseStatus = providers.gradleProperty("expectedSmokeMultiverseStatus").orNull
             if ((placeholderApiJar == null) != (miniPlaceholdersJar == null)) {
                 throw GradleException(
                     "placeholderApiPluginJar and miniPlaceholdersPluginJar must be provided together."
                 )
             }
-            listOfNotNull(placeholderApiJar, miniPlaceholdersJar).forEach { jar ->
-                if (!jar.isFile) throw GradleException("Placeholder plugin JAR does not exist: ${jar.absolutePath}")
+            if (expectedMultiverseStatus != null && multiverseSmokeJar == null) {
+                throw GradleException(
+                    "expectedSmokeMultiverseStatus requires smokeMultiversePluginJar."
+                )
+            }
+            listOfNotNull(placeholderApiJar, miniPlaceholdersJar, multiverseSmokeJar).forEach { jar ->
+                if (!jar.isFile) throw GradleException("Smoke dependency plugin JAR does not exist: ${jar.absolutePath}")
             }
             val verifyPlaceholderProviders = placeholderApiJar != null
 
@@ -380,6 +387,12 @@ tasks {
             if (verifyPlaceholderProviders) {
                 copy {
                     from(placeholderApiJar, miniPlaceholdersJar)
+                    into(pluginsDirectory)
+                }
+            }
+            if (multiverseSmokeJar != null) {
+                copy {
+                    from(multiverseSmokeJar)
                     into(pluginsDirectory)
                 }
             }
@@ -446,6 +459,20 @@ tasks {
                     if (unavailableProvider != null) {
                         throw GradleException(
                             "Paper JAR smoke test did not register '$unavailableProvider'. See ${logFile.absolutePath}"
+                        )
+                    }
+                }
+                if (expectedMultiverseStatus != null) {
+                    val startupLog = logFile.readText()
+                    val marker = "Multiverse-Core: $expectedMultiverseStatus"
+                    if (!startupLog.contains(marker)) {
+                        throw GradleException(
+                            "Paper JAR smoke test did not report '$marker'. See ${logFile.absolutePath}"
+                        )
+                    }
+                    if (startupLog.contains("NoClassDefFoundError")) {
+                        throw GradleException(
+                            "Paper JAR smoke test leaked a Multiverse linkage error. See ${logFile.absolutePath}"
                         )
                     }
                 }

@@ -1006,7 +1006,7 @@ public final class WorldLifecycleCoordinator {
     private boolean untrack(final String worldName) {
         try {
             return worldTrackingHook.untrack(worldName) != WorldTrackingHook.UntrackStatus.FAILED;
-        } catch (final RuntimeException failure) {
+        } catch (final RuntimeException | LinkageError failure) {
             return false;
         }
     }
@@ -1170,7 +1170,7 @@ public final class WorldLifecycleCoordinator {
                         completion.completeExceptionally(failure);
                     }
                 });
-            } catch (final RuntimeException exception) {
+            } catch (final RuntimeException | LinkageError exception) {
                 completion.completeExceptionally(exception);
             }
         }, () -> {
@@ -1182,7 +1182,7 @@ public final class WorldLifecycleCoordinator {
                         completion.completeExceptionally(failure);
                     }
                 });
-            } catch (final RuntimeException exception) {
+            } catch (final RuntimeException | LinkageError exception) {
                 completion.completeExceptionally(exception);
             }
         });
@@ -1237,7 +1237,7 @@ public final class WorldLifecycleCoordinator {
                         completion.completeExceptionally(failure);
                     }
                 });
-            } catch (final RuntimeException exception) {
+            } catch (final RuntimeException | LinkageError exception) {
                 completion.completeExceptionally(exception);
             }
         };
@@ -1272,7 +1272,7 @@ public final class WorldLifecycleCoordinator {
                     completion.completeExceptionally(failure);
                 }
             });
-        } catch (final RuntimeException exception) {
+        } catch (final RuntimeException | LinkageError exception) {
             completion.completeExceptionally(exception);
         }
     }
@@ -1321,7 +1321,7 @@ public final class WorldLifecycleCoordinator {
                 }
                 logOperation(worldName, state, result == null ? "unknown" : result.toString(), startedAt, failure);
             });
-        } catch (final RuntimeException exception) {
+        } catch (final RuntimeException | LinkageError exception) {
             if (state == WorldOperationState.DELETING) {
                 deleteLoadGenerations.remove(worldName);
             }

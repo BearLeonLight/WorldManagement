@@ -110,6 +110,6 @@ Warp設定、刪除、trust及ownership rank/access的世界參數只讀每秒�
 
 ## Multiverse-Core 5
 
-Multiverse-Core為optional dependency。`hooks.yml`啟用且MV5 API可用時，`remove`與第二次confirmed `delete`會透過`WorldManager`及`RemoveWorldOptions`解除MV追蹤，設定`unloadBukkitWorld(false)`以保留現有Bukkit runtime，並額外確認`saveWorldsConfig()`成功，避免world在MV reload或伺服器重啟後再次載入。WorldManagement不直接修改MV的`worlds.yml`，也不使用deprecated remove overload。
+Multiverse-Core為optional dependency；lifecycle hook最低支援5.2.0，因為5.0.x尚無保留Bukkit runtime的`RemoveWorldOptions`。`hooks.yml`啟用且相容API可用時，`remove`與第二次confirmed `delete`會透過`WorldManager`及`RemoveWorldOptions`解除MV追蹤，設定`unloadBukkitWorld(false)`以保留現有Bukkit runtime，並額外確認`saveWorldsConfig()`成功，避免world在MV reload或伺服器重啟後再次載入。WorldManagement不直接修改MV的`worlds.yml`，也不使用deprecated remove overload。
 
-伺服器未安裝MV時此hook為no-op；明確停用時WorldManagement不管理MV追蹤狀態。若已安裝且hook啟用，但API連線、remove或設定保存失敗，操作會fail closed，不繼續detach、quarantine或刪除。建議讓WorldManagement成為remove/delete的唯一入口；MV的import/create、alias、game mode、difficulty、portal及其他世界政策不會雙向同步。MV remove API會同步觸發Bukkit event與保存YAML，因此必須在Paper global scheduler呼叫，可能產生第三方同步I/O延遲。
+伺服器未安裝MV時此hook為no-op；明確停用時WorldManagement不管理MV追蹤狀態。若已安裝且hook啟用，但版本低於5.2.0、API連線、runtime linkage、remove或設定保存失敗，操作會fail closed，不繼續detach、quarantine或刪除，且失敗會釋放per-world operation供管理員重試。建議讓WorldManagement成為remove/delete的唯一入口；MV的import/create、alias、game mode、difficulty、portal及其他世界政策不會雙向同步。MV remove API會同步觸發Bukkit event與保存YAML，因此必須在Paper global scheduler呼叫，可能產生第三方同步I/O延遲。

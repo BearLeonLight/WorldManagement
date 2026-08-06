@@ -99,6 +99,42 @@ final class WorldLifecycleCoordinatorTest {
     }
 
     @Test
+    void releasesDeleteOperationWhenExternalTrackingApiHasALinkageFailure() throws Exception {
+        final PluginIoExecutor executor = new PluginIoExecutor("LifecycleTest");
+        try {
+            final WorldManagementService metadata = new WorldManagementService(
+                executor, new InMemoryWorldMetadataRepository(), new WorldRegistry()
+            );
+            metadata.load().join();
+            metadata.adopt("creative", true).join();
+            final Path worldDirectory = Files.createDirectories(temporaryDirectory.resolve("creative"));
+            Files.writeString(worldDirectory.resolve("level.dat"), "world");
+            final WorldTrackingHook trackingHook = worldName -> {
+                throw new NoClassDefFoundError(
+                    "org/mvplugins/multiverse/core/world/options/RemoveWorldOptions"
+                );
+            };
+            final WorldLifecycleCoordinator service = new WorldLifecycleCoordinator(
+                new FakeGateway(), metadata, true, executor, storage(temporaryDirectory), Duration.ZERO,
+                new ImmediateDispatcher(), Optional.empty(), trackingHook, null
+            );
+
+            assertEquals(
+                WorldLifecycleCoordinator.DeleteStatus.TRACKING_REMOVAL_FAILED,
+                service.delete("creative").join().status()
+            );
+            assertEquals(
+                WorldLifecycleCoordinator.DeleteStatus.TRACKING_REMOVAL_FAILED,
+                service.delete("creative").join().status()
+            );
+            assertTrue(Files.isRegularFile(worldDirectory.resolve("level.dat")));
+            assertTrue(metadata.managedWorld("creative").isPresent());
+        } finally {
+            executor.shutdown(Duration.ofSeconds(1));
+        }
+    }
+
+    @Test
     void createsWorldAndPersistsItsMetadata() {
         final PluginIoExecutor executor = new PluginIoExecutor("LifecycleTest");
         try {

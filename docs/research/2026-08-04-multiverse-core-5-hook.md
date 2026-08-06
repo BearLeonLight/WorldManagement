@@ -2,7 +2,7 @@
 
 ## 問題與版本
 
-WorldManagement在`remove`或永久`delete`時，必須如何讓Multiverse-Core 5停止追蹤world，同時保留WorldManagement自己的unload、quarantine與刪除流程？本研究適用於WorldManagement目前compile-only依賴的Multiverse-Core 5.7.3與Paper 26.2。
+WorldManagement在`remove`或永久`delete`時，必須如何讓Multiverse-Core 5停止追蹤world，同時保留WorldManagement自己的unload、quarantine與刪除流程？本研究適用於WorldManagement目前compile-only依賴的Multiverse-Core 5.7.3與Paper 26.2；安全lifecycle整合的最低MV版本為5.2.0。
 
 ## 結論
 
@@ -11,6 +11,8 @@ WorldManagement在`remove`或永久`delete`時，必須如何讓Multiverse-Core 
 - remove成功後再明確呼叫並檢查`WorldManager.saveWorldsConfig()`。MV remove實作會嘗試保存，但其remove結果不反映該save結果；只有第二次可觀察save成功，才能證明重啟後不會由`worlds.yml`重新加入。
 - remove或save失敗時fail closed。save失敗後保留retryable pending state；下一次同world操作只重試保存，不重複remove。
 - API呼叫必須位於Paper global scheduler。MV remove同步觸發Bukkit event，並同步保存YAML；將它移到WorldManagement的I/O worker會違反Bukkit thread affinity。同步I/O造成的tick延遲是目前第三方API限制，需在真實伺服器量測。
+- `RemoveWorldOptions`自Multiverse-Core 5.2.0起提供。5.0.x只有無法表達「保留Bukkit runtime」的舊remove overload，且目前API已將其標記deprecated；WorldManagement不使用該overload。連線時缺少options class必須標示API unavailable，remove/delete fail closed。
+- optional API在連線後仍可能因插件替換或二進位不相容拋出`LinkageError`；hook必須轉成FAILED，lifecycle operation wrapper必須完成並釋放per-world gate。
 
 ## 推薦 Hook 範圍
 
@@ -31,6 +33,8 @@ WorldManagement在`remove`或永久`delete`時，必須如何讓Multiverse-Core 
 ## 已驗證 Runtime
 
 - `paperConsoleCommandTest`使用SHA-256固定的Multiverse-Core 5.7.3 plugin artifact。
+- 聚焦測試模擬Multiverse-Core 5.0.x缺少`RemoveWorldOptions`與runtime `NoClassDefFoundError`，驗證啟動capability rejection、fail-closed delete及operation gate釋放。
+- `paperJarSmokeTest`以使用者實際的Multiverse-Core 5.0.0 JAR驗證WorldManagement正常啟用、摘要顯示`Multiverse-Core: incompatible; requires 5.2.0+`、log無`NoClassDefFoundError`且terminal shutdown完成。
 - MV建立並追蹤的`archive`經WM adopt/remove後，`worlds.yml`不再包含其`read-only.legacy-world-name`。
 - MV建立並追蹤的`basic`經WM adopt、兩次confirmed delete後，在同一runtime移除MV entry、WorldManagement metadata、world storage與quarantine claim。
 - Paper重啟後，`archive`與`basic`仍未重新出現在MV `worlds.yml`，刪除資料也未復現。

@@ -175,7 +175,7 @@ miniplaceholders:
 
 `luckperms.enabled`控制optional LuckPerms API整合。服務可用時，Warp `required-permission`使用目的Bukkit world context的LuckPerms cached permission；服務缺失、停用或查詢失敗時，非空外部permission會fail closed。一般command permission與protection bypass仍由Paper/Bukkit判斷。
 
-`multiverse.enabled`控制optional Multiverse-Core 5 lifecycle整合。未安裝MV時不影響操作；明確停用時WorldManagement不會解除MV追蹤，管理員必須自行避免MV重新載入。啟用且MV已安裝時，`remove`與第二次confirmed `delete`會先使用MV公開API移除world、保留Bukkit runtime並確認`worlds.yml`保存；API unavailable、remove或save失敗會fail closed。該MV API同步觸發Bukkit event與YAML保存，依thread affinity必須在Paper global scheduler執行，是已知的第三方同步I/O限制。`locale`決定使用的`messages_<locale>.yml`。
+`multiverse.enabled`控制optional Multiverse-Core 5 lifecycle整合，最低支援版本為5.2.0。未安裝MV時不影響操作；明確停用時WorldManagement不會解除MV追蹤，管理員必須自行避免MV重新載入。啟用且相容MV已安裝時，`remove`與第二次confirmed `delete`會先使用MV公開API移除world、保留Bukkit runtime並確認`worlds.yml`保存；5.0.x因缺少安全untracking options會在啟動摘要顯示`incompatible; requires 5.2.0+`。版本不相容、runtime linkage、remove或save失敗都會fail closed並釋放per-world operation。該MV API同步觸發Bukkit event與YAML保存，依thread affinity必須在Paper global scheduler執行，是已知的第三方同步I/O限制。`locale`決定使用的`messages_<locale>.yml`。
 
 `placeholderapi.enabled`與`miniplaceholders.enabled`分別控制WorldManagement是否向對應的optional plugin註冊`wm` provider。舊版`hooks.yml`缺少這兩個key時，啟動會補上`enabled: true`，不覆寫既有值。依賴未安裝或開關停用不會阻止WorldManagement啟用；啟動摘要會分別顯示`available`、`not installed`、`disabled by hooks.yml`、`API unavailable`、`identifier collision`或`registration failed`。依賴在runtime啟用時會嘗試註冊，停用時會解除WorldManagement自己持有的provider；插件shutdown也會清理註冊。
 

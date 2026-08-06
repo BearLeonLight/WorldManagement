@@ -779,6 +779,12 @@ public final class WorldManagementPlugin extends JavaPlugin {
         }
         try {
             return new MultiverseHookConnection(MultiverseWorldTrackingHook.connect(), "available");
+        } catch (final MultiverseWorldTrackingHook.IncompatibleApiException failure) {
+            getLogger().warning(failure.getMessage());
+            return new MultiverseHookConnection(
+                worldName -> WorldTrackingHook.UntrackStatus.FAILED,
+                "incompatible; requires 5.2.0+"
+            );
         } catch (final RuntimeException | LinkageError failure) {
             getLogger().log(Level.WARNING, "Multiverse-Core is installed but its API could not be initialized.", failure);
             return new MultiverseHookConnection(

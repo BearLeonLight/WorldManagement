@@ -8,6 +8,7 @@ WorldManagement 是面向 Paper 伺服器的世界管理插件，目標是提供
 
 - Java 25 LTS
 - 與 `paper-plugin.yml` 宣告版本相容的 Paper 伺服器
+- 可選的Multiverse-Core lifecycle整合需要5.2.0以上版本；5.0.x缺少保留Bukkit runtime的安全untracking API
 - Windows、Linux 或 macOS
 
 ## 建置與測試
@@ -226,7 +227,7 @@ WorldManagement 在 `INFO` 層級輸出精簡的啟動階段摘要：設定與 s
 - bounded單一I/O worker、migration期間metadata mutation freeze/target rollback，以及不阻塞Paper thread的event-driven shutdown；未提交的teleport會立即拒絕，已提交的`teleportAsync`會與指令結果分離並持續drain到底層Paper future完成；同步shutdown admission失敗不會跳過terminal resource close。terminal resource close由有硬上限的受管daemon worker逐項隔離，既有I/O或close忽略interrupt時仍會嘗試後續資源，逾時future會明確失敗
 - WorldManagement 專用 `OFF/BASIC/VERBOSE` 診斷、area allowlist、Paper console 與 bounded rotating file sink
 - 可選 LuckPerms Warp外部權限整合；以已載入且identity相符的目的Bukkit world建立cached permission context，玩家名稱仍只由線上快照解析，WorldManagement rank不映射為LuckPerms group
-- 可選 Multiverse-Core 5 lifecycle整合；`remove`與第二次confirmed `delete`在改變WorldManagement狀態前使用MV公開API解除追蹤、保留Bukkit runtime並驗證`worlds.yml`持久化，失敗時fail closed
+- 可選 Multiverse-Core 5.2.0以上lifecycle整合；`remove`與第二次confirmed `delete`在改變WorldManagement狀態前使用MV公開API解除追蹤、保留Bukkit runtime並驗證`worlds.yml`持久化，不相容API、remove或save失敗時fail closed且釋放該world operation
 - 可選PlaceholderAPI與MiniPlaceholders provider；共用`wm` namespace與immutable snapshot resolver，提供global、指定世界及玩家目前世界placeholder
 - `messages_zh_TW.yml` 使用 Adventure MiniMessage，集中管理全部指令回覆、可選共用前綴與逐語意訊息 key
 - 玩家與 RCON 接收 Adventure Component；本機控制台以固定 ANSI 16 色呈現啟動摘要與指令回覆，Paper 檔案 log 保持純文字
@@ -241,7 +242,7 @@ MySQL/MariaDB 的 adapter 可使用 [設定與 metadata](docs/configuration.md) 
 
 ## 外部世界工具
 
-WorldManagement 的治理功能只套用於明確登錄的ACTIVE世界。`/wm adopt <world>`只會為已載入世界建立本插件的metadata；不改變地圖檔、載入狀態或Multiverse等外部工具設定。啟用Multiverse-Core hook後，`/wm remove <world>`與第二次confirmed delete會在WorldManagement mutation前透過MV5公開API解除追蹤並確認`worlds.yml`已保存，避免MV在之後reload或重啟時重新載入該世界；API或保存失敗時不會繼續detach、quarantine或刪除。唯一載入的unknown world可執行runtime-only unload，或在confirmed delete時先以exact identity建立DELETE_AUTO DETACHED metadata後進入安全刪除流程；除此之外，未登錄世界不套用保護、Warp或其他metadata操作。
+WorldManagement 的治理功能只套用於明確登錄的ACTIVE世界。`/wm adopt <world>`只會為已載入世界建立本插件的metadata；不改變地圖檔、載入狀態或Multiverse等外部工具設定。啟用Multiverse-Core hook後，`/wm remove <world>`與第二次confirmed delete會在WorldManagement mutation前透過MV 5.2.0以上公開API解除追蹤並確認`worlds.yml`已保存，避免MV在之後reload或重啟時重新載入該世界；API不相容、linkage、remove或保存失敗時不會繼續detach、quarantine或刪除，也不會永久占用該world operation。唯一載入的unknown world可執行runtime-only unload，或在confirmed delete時先以exact identity建立DELETE_AUTO DETACHED metadata後進入安全刪除流程；除此之外，未登錄世界不套用保護、Warp或其他metadata操作。
 
 ## 文件
 
