@@ -30,6 +30,7 @@ import io.github.bearl.worldmanagement.storage.StorageProvider;
 import java.util.List;
 import java.time.Instant;
 import java.util.Locale;
+import java.util.Map;
 import java.util.Objects;
 import java.util.Optional;
 import java.util.Set;
@@ -37,6 +38,7 @@ import java.util.UUID;
 import java.util.Arrays;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CompletionException;
+import net.kyori.adventure.text.Component;
 import org.bukkit.command.CommandSender;
 import org.bukkit.entity.Player;
 
@@ -704,7 +706,10 @@ public final class WorldManagementCommand {
     ) {
         final String actor = actorOf(sender);
         if (!sender.hasPermission(permission)) {
-            send(sender, "command.permission.lifecycle", "operation", operation);
+            messageSender.send(sender, messages.component(
+                "command.permission.lifecycle",
+                Map.of("operation", messages.termComponent(operationTerm(operation)))
+            ));
             return true;
         }
         if (arguments.length < 2 || arguments.length > 3) {
@@ -722,13 +727,42 @@ public final class WorldManagementCommand {
             : lifecycleService.unloadAsync(worldName, fallbackWorld, auditEvent(actor, "world.unload", worldName, fallbackWorld.orElse("")));
         action.whenComplete((result, failure) -> {
             if (failure != null) {
-                respond(responseTarget, "command.lifecycle.failure", "operation", operation, "world", worldName, "result", successVerb);
+                respondLifecycle(responseTarget, "command.lifecycle.failure", operation, worldName, successVerb);
                 return;
             }
-            respond(responseTarget, lifecycleResultKey(result.status()),
-                "operation", operation, "world", worldName, "result", successVerb);
+            respondLifecycle(responseTarget, lifecycleResultKey(result.status()), operation, worldName, successVerb);
         });
         return true;
+    }
+
+    private void respondLifecycle(
+        final CommandMessageSender.Target target,
+        final String key,
+        final String operation,
+        final String worldName,
+        final String result
+    ) {
+        messageSender.send(target, messages.component(key, Map.of(
+            "operation", messages.termComponent(operationTerm(operation)),
+            "world", Component.text(worldName),
+            "result", messages.termComponent(resultTerm(result))
+        )));
+    }
+
+    private static String operationTerm(final String operation) {
+        return switch (operation) {
+            case "load" -> "operation.load";
+            case "unload" -> "operation.unload";
+            default -> throw new IllegalArgumentException("Unknown lifecycle operation: " + operation);
+        };
+    }
+
+    private static String resultTerm(final String result) {
+        return switch (result) {
+            case "loaded" -> "result.loaded";
+            case "unloaded" -> "result.unloaded";
+            default -> throw new IllegalArgumentException("Unknown lifecycle result: " + result);
+        };
     }
 
     private String validWorldName(final CommandSender sender, final String suppliedName) {

@@ -26,8 +26,8 @@ final class StartupDiagnosticsTest {
 
         clock.set(57_000_000L);
         assertEquals(
-            "WorldManagement 0.1.0 enabled. Took 56ms",
-            diagnostics.startupCompleted("WorldManagement 0.1.0 enabled")
+            "WorldManagement 1.0.0 enabled. Took 56ms",
+            diagnostics.startupCompleted("WorldManagement 1.0.0 enabled")
         );
     }
 

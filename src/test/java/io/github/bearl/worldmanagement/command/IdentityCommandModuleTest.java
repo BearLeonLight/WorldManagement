@@ -1,6 +1,7 @@
 package io.github.bearl.worldmanagement.command;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import io.github.bearl.worldmanagement.audit.AuditEvent;
@@ -60,7 +61,38 @@ final class IdentityCommandModuleTest {
             final String rendered = PlainTextComponentSerializer.plainText().serialize(sender.message());
             assertTrue(rendered.contains("minecraft:creative"));
             assertTrue(rendered.contains("99"));
-            assertTrue(rendered.contains("SYNC_PENDING"));
+            assertTrue(rendered.contains("環境：主世界"));
+            assertTrue(rendered.contains("狀態：等待同步"));
+            assertTrue(rendered.contains("生命週期能力：可管理"));
+            assertTrue(rendered.contains("待確認觀察：Paper 鍵=minecraft:creative"));
+            assertTrue(rendered.contains("環境=主世界"));
+            assertFalse(rendered.contains("SYNC_PENDING"));
+        }
+    }
+
+    @Test
+    void showLocalizesVerifiedIdentityWithoutPendingObservation() throws Exception {
+        try (Fixture fixture = fixture()) {
+            final CapturingSender sender = new CapturingSender();
+
+            fixture.module.execute(sender.sender(), new String[] {"identity", "show", "creative"});
+
+            final String rendered = PlainTextComponentSerializer.plainText().serialize(sender.message());
+            assertTrue(rendered.contains("狀態：已驗證"));
+            assertTrue(rendered.contains("生命週期能力：可管理"));
+            assertTrue(rendered.contains("待確認觀察：無"));
+        }
+    }
+
+    @Test
+    void showLocalizesExternalOnlyLifecycleCapability() throws Exception {
+        try (Fixture fixture = fixture(LifecycleCapability.EXTERNAL_ONLY)) {
+            final CapturingSender sender = new CapturingSender();
+
+            fixture.module.execute(sender.sender(), new String[] {"identity", "show", "creative"});
+
+            final String rendered = PlainTextComponentSerializer.plainText().serialize(sender.message());
+            assertTrue(rendered.contains("生命週期能力：僅外部管理"));
         }
     }
 
@@ -102,6 +134,8 @@ final class IdentityCommandModuleTest {
             final WorldMetadata accepted = fixture.service.managedWorld("creative").orElseThrow();
             assertEquals(replacement, accepted.identity());
             assertTrue(accepted.warps().isEmpty());
+            assertTrue(PlainTextComponentSerializer.plainText().serialize(sender.message())
+                .contains("世界傳送點處理方式：清除世界傳送點"));
         }
     }
 
@@ -122,6 +156,10 @@ final class IdentityCommandModuleTest {
     }
 
     private Fixture fixture() {
+        return fixture(LifecycleCapability.MANAGED);
+    }
+
+    private Fixture fixture(final LifecycleCapability capability) {
         final PluginIoExecutor executor = new PluginIoExecutor("IdentityCommandTest");
         final List<AuditEvent> auditEvents = new CopyOnWriteArrayList<>();
         final AuditService auditService = new AuditService(
@@ -138,7 +176,7 @@ final class IdentityCommandModuleTest {
         final InMemoryWorldMetadataRepository repository = new InMemoryWorldMetadataRepository();
         repository.create(WorldMetadata.createDefault(
             "creative", identity("11111111-1111-1111-1111-111111111111", 42L),
-            LifecycleCapability.MANAGED, Optional.empty(), true
+            capability, Optional.empty(), true
         ));
         final WorldManagementService service = new WorldManagementService(
             executor, repository, new WorldRegistry(), auditService

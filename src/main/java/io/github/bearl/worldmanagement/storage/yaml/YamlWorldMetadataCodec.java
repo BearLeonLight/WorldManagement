@@ -35,7 +35,7 @@ import java.util.UUID;
 /** Maps typed world metadata to and from a single BoostedYAML document. */
 public final class YamlWorldMetadataCodec implements WorldMetadataCodec {
 
-    public static final int CURRENT_SCHEMA_VERSION = 5;
+    public static final int CURRENT_SCHEMA_VERSION = 1;
 
     private static final String NONE = "NONE";
     private final DisplayNameValidator displayNameValidator = new DisplayNameValidator();
@@ -105,7 +105,7 @@ public final class YamlWorldMetadataCodec implements WorldMetadataCodec {
     public WorldMetadata decode(final String yaml) {
         try {
             final YamlDocument document = YamlDocument.create(new ByteArrayInputStream(yaml.getBytes(StandardCharsets.UTF_8)));
-            final int schemaVersion = requireSchemaVersion(document);
+            requireSchemaVersion(document);
             final String worldName = requireString(document, "world-id");
             final String displayName = requireString(document, "display-name");
             displayNameValidator.validate(displayName);
@@ -121,12 +121,8 @@ public final class YamlWorldMetadataCodec implements WorldMetadataCodec {
                 ? Optional.of(parseIdentity(document, "identity.pending.snapshot"))
                 : Optional.empty();
             final String requestedWorldType = requireString(document, "creation.requested-world-type");
-            final Optional<WorldGeneratorReference> generator = schemaVersion >= 2
-                ? parseGenerator(document)
-                : Optional.empty();
-            final Optional<WorldGeneratorReference> biomeProvider = schemaVersion >= 5
-                ? parseProvider(document, "creation.biome-provider")
-                : Optional.empty();
+            final Optional<WorldGeneratorReference> generator = parseGenerator(document);
+            final Optional<WorldGeneratorReference> biomeProvider = parseProvider(document, "creation.biome-provider");
             return new WorldMetadata(
                 worldName,
                 displayName,
@@ -151,12 +147,8 @@ public final class YamlWorldMetadataCodec implements WorldMetadataCodec {
                 parsePlayerRanks(document.getSection("players")),
                 parseWarps(requireSection(document, "warps")),
                 requireLong(document, "version"),
-                schemaVersion >= 3
-                    ? parseOptionalUuid(document, "deletion.transaction-id")
-                    : Optional.empty(),
-                schemaVersion >= 4
-                    ? WorldRegistrationSource.valueOf(requireString(document, "registration-source"))
-                    : WorldRegistrationSource.STANDARD
+                parseOptionalUuid(document, "deletion.transaction-id"),
+                WorldRegistrationSource.valueOf(requireString(document, "registration-source"))
             );
         } catch (final IOException | IllegalArgumentException exception) {
             throw new StorageException("Could not decode world metadata.", exception);

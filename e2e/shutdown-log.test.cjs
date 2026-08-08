@@ -27,3 +27,14 @@ test('rejects one attempt that reports a drain failure', () => {
     /first Paper shutdown reported 'did not drain'/
   )
 })
+
+test('rejects one attempt that reports a Paper watchdog stall', () => {
+  assert.throws(
+    () => assertSuccessfulShutdown(
+      '[Paper] The server has not responded for 10 seconds! Creating thread dump\n' +
+        '[WorldManagement] WorldManagement terminal shutdown complete.\n',
+      'first Paper'
+    ),
+    /first Paper runtime reported a Paper watchdog stall/
+  )
+})

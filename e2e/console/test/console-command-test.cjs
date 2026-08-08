@@ -218,14 +218,14 @@ async function runConsoleMatrix (paper, logPath, serverRoot) {
 
   await command(paper, logPath, 'wm list', '受管世界：', 'wm list')
   await command(paper, logPath, 'wm list detached', '目前沒有已停止管理的世界。', 'wm list detached')
-  await command(paper, logPath, 'wm list all', 'overworld - NORMAL - UNKNOWN', 'wm list all')
+  await command(paper, logPath, 'wm list all', 'overworld - 主世界 - 未知', 'wm list all')
   await command(paper, logPath, 'worldmanager list', '受管世界：', 'wm list')
   await command(paper, logPath, 'wmwarp list warpfixture', '傳送點：obsolete', 'wm warp list <world>')
   await command(paper, logPath, 'wm warp delete warpfixture obsolete', '傳送點 obsolete 已刪除', 'wm warp delete <world> <name>')
   assert.equal(readMetadata(serverRoot, 'warpfixture').warps.obsolete, undefined, 'Warp delete must persist an empty warp map.')
 
-  await command(paper, logPath, 'wm identity show syncfixture', 'SYNC_PENDING', 'wm identity show <world>')
-  await command(paper, logPath, 'wm identity sync syncfixture', 'pending identity snapshot已同步。', 'wm identity sync <world>')
+  await command(paper, logPath, 'wm identity show syncfixture', '等待同步', 'wm identity show <world>')
+  await command(paper, logPath, 'wm identity sync syncfixture', '待確認識別快照已同步', 'wm identity sync <world>')
   assertIdentity(readMetadata(serverRoot, 'syncfixture'), {
     state: 'VERIFIED', uuid: '11111111-1111-1111-1111-111111111111', seed: 84, structures: false, pending: false
   })
@@ -235,7 +235,7 @@ async function runConsoleMatrix (paper, logPath, serverRoot) {
 
   await command(
     paper, logPath, 'wm identity accept-replacement clearfixture confirm clear-warps',
-    'Warp policy：clear-warps。', 'wm identity accept-replacement <world> confirm clear-warps'
+    '世界傳送點處理方式：清除世界傳送點', 'wm identity accept-replacement <world> confirm clear-warps'
   )
   const clearFixture = readMetadata(serverRoot, 'clearfixture')
   assertIdentity(clearFixture, {
@@ -248,7 +248,7 @@ async function runConsoleMatrix (paper, logPath, serverRoot) {
 
   await command(
     paper, logPath, 'wm identity accept-replacement keepfixture confirm keep-warps',
-    'Warp policy：keep-warps。', 'wm identity accept-replacement <world> confirm keep-warps'
+    '世界傳送點處理方式：保留世界傳送點', 'wm identity accept-replacement <world> confirm keep-warps'
   )
   const keepFixture = readMetadata(serverRoot, 'keepfixture')
   assertIdentity(keepFixture, {
@@ -271,7 +271,7 @@ async function runConsoleMatrix (paper, logPath, serverRoot) {
 
   await command(
     paper, logPath, 'wm identity abandon abandonfixture confirm',
-    'metadata已轉為DETACHED', 'wm identity abandon <world> confirm'
+    '中繼資料已轉為已停止管理', 'wm identity abandon <world> confirm'
   )
   const abandonFixture = readMetadata(serverRoot, 'abandonfixture')
   assert.equal(abandonFixture['management-state'], 'DETACHED', 'Identity abandon must detach metadata.')
@@ -297,13 +297,13 @@ async function runConsoleMatrix (paper, logPath, serverRoot) {
 
   await command(paper, logPath, 'wm adopt overworld', '世界 overworld 已加入管理', 'wm adopt <world>')
   await command(
-    paper, logPath, 'wm list all', 'overworld - NORMAL - ACTIVE', 'wm list all', false
+    paper, logPath, 'wm list all', 'overworld - 主世界 - 受管', 'wm list all', false
   )
 
   await feedback(paper, logPath, 'wme2e world create adoptdetached', 'WM_E2E_WORLD_CREATED world=minecraft:adoptdetached loaded=true')
   await command(
     paper, logPath, 'wm adopt adoptdetached --detached',
-    '世界 adoptdetached 已登錄，metadata 已保存但不套用治理', 'wm adopt <world> --detached'
+    '世界 adoptdetached 已登錄，中繼資料已保存但不套用治理', 'wm adopt <world> --detached'
   )
   assert.equal(readMetadata(serverRoot, 'adoptdetached')['management-state'], 'DETACHED')
   await command(
@@ -332,7 +332,7 @@ async function runConsoleMatrix (paper, logPath, serverRoot) {
   await command(paper, logPath, 'wm create typeonly NORMAL FLAT', '世界 typeonly 已建立並加入管理', 'wm create <world> <environment> <world-type>')
   await command(
     paper, logPath, 'wm create createddetached NORMAL FLAT --detached',
-    '世界 createddetached 已建立，metadata 已保存但不套用', 'wm create <world> <environment> <world-type> <options>', false
+    '世界 createddetached 已建立，中繼資料已保存但不套用', 'wm create <world> <environment> <world-type> <options>', false
   )
   assert.equal(readMetadata(serverRoot, 'createddetached')['management-state'], 'DETACHED')
   await command(paper, logPath, 'wm load createddetached', '世界 createddetached 已經載入', 'wm load <world>', false)
@@ -341,7 +341,7 @@ async function runConsoleMatrix (paper, logPath, serverRoot) {
     '已永久清除已停止管理世界 createddetached', 'wm remove <world> purge confirm', false
   )
   await feedback(paper, logPath, 'wme2e world create runtimeonly', 'WM_E2E_WORLD_CREATED world=minecraft:runtimeonly loaded=true')
-  await command(paper, logPath, 'wm unload runtimeonly', '世界 runtimeonly 已unloaded', 'wm unload <world>', false)
+  await command(paper, logPath, 'wm unload runtimeonly', '世界 runtimeonly 已卸載', 'wm unload <world>', false)
   assert.equal(
     fs.existsSync(path.join(serverRoot, 'plugins', 'WorldManagement', 'worlds', 'runtimeonly.yml')),
     false,
@@ -349,25 +349,25 @@ async function runConsoleMatrix (paper, logPath, serverRoot) {
   )
   await command(
     paper, logPath, 'wm load runtimeonly NORMAL --detached',
-    '世界 runtimeonly 已載入，metadata 已保存但不套用治理',
+    '世界 runtimeonly 已載入，中繼資料已保存但不套用治理',
     'wm load <world> <environment> --detached'
   )
   assert.equal(readMetadata(serverRoot, 'runtimeonly')['management-state'], 'DETACHED')
   await command(paper, logPath, 'wm create imported NORMAL FLAT --seed 12345', '世界 imported 已建立並加入管理', 'wm create <world> <environment> <world-type> <options>')
-  await command(paper, logPath, 'wm unload imported', '世界 imported 已unloaded', 'wm unload <world>')
-  await command(paper, logPath, 'wm load imported', '世界 imported 已loaded', 'wm load <world>')
-  await command(paper, logPath, 'wm unload imported', '世界 imported 已unloaded', 'wm unload <world>')
+  await command(paper, logPath, 'wm unload imported', '世界 imported 已卸載', 'wm unload <world>')
+  await command(paper, logPath, 'wm load imported', '世界 imported 已載入', 'wm load <world>')
+  await command(paper, logPath, 'wm unload imported', '世界 imported 已卸載', 'wm unload <world>')
   await command(paper, logPath, 'wm remove imported', '世界 imported 已停止管理', 'wm remove <world>')
   await command(paper, logPath, 'wm remove imported purge confirm', '已永久清除已停止管理世界 imported', 'wm remove <world> purge confirm')
   await command(
     paper, logPath, 'wm import imported NORMAL --detached',
-    '世界 imported 已匯入，metadata 已保存但不套用治理', 'wm import <world> <environment> --detached'
+    '世界 imported 已匯入，中繼資料已保存但不套用治理', 'wm import <world> <environment> --detached'
   )
   assert.equal(readMetadata(serverRoot, 'imported')['management-state'], 'DETACHED')
-  await command(paper, logPath, 'wm unload imported', '世界 imported 已unloaded', 'wm unload <world>', false)
-  await command(paper, logPath, 'wm load imported', '世界 imported 已loaded', 'wm load <world>', false)
+  await command(paper, logPath, 'wm unload imported', '世界 imported 已卸載', 'wm unload <world>', false)
+  await command(paper, logPath, 'wm load imported', '世界 imported 已載入', 'wm load <world>', false)
   await command(paper, logPath, 'wm manage imported', '世界 imported 已重新加入管理', 'wm manage <world>', false)
-  await command(paper, logPath, 'wm unload imported', '世界 imported 已unloaded', 'wm unload <world>', false)
+  await command(paper, logPath, 'wm unload imported', '世界 imported 已卸載', 'wm unload <world>', false)
   await command(paper, logPath, 'wm remove imported', '世界 imported 已停止管理', 'wm remove <world>', false)
   await command(
     paper, logPath, 'wm remove imported purge confirm',
@@ -391,7 +391,7 @@ async function runConsoleMatrix (paper, logPath, serverRoot) {
   await feedback(paper, logPath, 'mv create archive NORMAL', "World 'archive' created!")
   assertMultiverseTracked(serverRoot, 'archive')
   await command(paper, logPath, 'wm adopt archive', '世界 archive 已加入管理', 'wm adopt <world>')
-  await command(paper, logPath, 'wm unload archive', '世界 archive 已unloaded', 'wm unload <world>')
+  await command(paper, logPath, 'wm unload archive', '世界 archive 已卸載', 'wm unload <world>')
   await command(paper, logPath, 'wm remove archive', '世界 archive 已停止管理', 'wm remove <world>')
   assertMultiverseUntracked(serverRoot, 'archive')
   await command(paper, logPath, 'wm list detached', 'archive', 'wm list detached')
@@ -513,8 +513,14 @@ function metadataFixture (worldId, {
       'lifecycle-capability': 'MANAGED',
       pending: pending === undefined ? { present: false } : { present: true, snapshot: pending }
     },
-    creation: { 'requested-world-type': 'NONE' },
+    creation: {
+      'requested-world-type': 'NONE',
+      generator: { present: false },
+      'biome-provider': { present: false }
+    },
     'management-state': 'ACTIVE',
+    deletion: { 'transaction-id': 'NONE' },
+    'registration-source': 'STANDARD',
     'desired-state': 'UNLOADED',
     owner: 'server',
     version: 0,
@@ -568,7 +574,7 @@ function readMetadata (serverRoot, worldId) {
   const metadataFile = path.join(serverRoot, 'plugins', 'WorldManagement', 'worlds', `${worldId}.yml`)
   assert.ok(fs.existsSync(metadataFile), `Expected metadata file: ${metadataFile}`)
   const metadata = YAML.parse(fs.readFileSync(metadataFile, 'utf8'))
-  assert.equal(metadata['schema-version'], 5, `${worldId} must use schema 5 metadata.`)
+  assert.equal(metadata['schema-version'], 1, `${worldId} must use schema 1 metadata.`)
   return metadata
 }
 

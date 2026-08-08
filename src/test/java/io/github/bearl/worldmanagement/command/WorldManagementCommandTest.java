@@ -86,6 +86,27 @@ final class WorldManagementCommandTest {
     }
 
     @Test
+    void localizesLifecycleOperationInPermissionResponse() throws Exception {
+        final PluginIoExecutor executor = new PluginIoExecutor("CommandLifecycleLocaleTest");
+        try {
+            final WorldManagementService metadata = new WorldManagementService(
+                executor, new InMemoryWorldMetadataRepository(), new WorldRegistry()
+            );
+            metadata.load().join();
+            final WorldManagementCommand command = command(metadata, executor, new LoadedWorldCatalog());
+            final RespondingSender sender = new RespondingSender(false);
+
+            command.execute(sender.sender, new String[] {"load", "creative"});
+
+            final String response = net.kyori.adventure.text.serializer.plain.PlainTextComponentSerializer
+                .plainText().serialize(sender.response.get(2, TimeUnit.SECONDS));
+            assertTrue(response.contains("執行載入世界操作"));
+        } finally {
+            executor.shutdown(Duration.ofSeconds(1));
+        }
+    }
+
+    @Test
     void loadedWorldListClassifiesOnlyExactMetadataIdentities() {
         final PluginIoExecutor executor = new PluginIoExecutor("CommandLoadedListTest");
         try {
@@ -313,6 +334,13 @@ final class WorldManagementCommandTest {
             assertEquals(WorldRuntimeGateway.WorldEnvironment.NETHER, runtime.environment);
             assertTrue(metadata.managedWorld("archive").isEmpty());
             assertTrue(metadata.detachedWorld("archive").isPresent());
+
+            final RespondingSender unloadSender = new RespondingSender();
+            command.execute(unloadSender.sender, new String[] {"unload", "archive"});
+            final String unloadResponse = net.kyori.adventure.text.serializer.plain.PlainTextComponentSerializer
+                .plainText().serialize(unloadSender.response.get(2, TimeUnit.SECONDS));
+
+            assertTrue(unloadResponse.contains("世界 archive 已卸載"));
         } finally {
             executor.shutdown(Duration.ofSeconds(1));
         }
@@ -409,22 +437,30 @@ final class WorldManagementCommandTest {
 
     private static final class RespondingSender {
         private final CompletableFuture<Component> response = new CompletableFuture<>();
-        private final CommandSender sender = (CommandSender) Proxy.newProxyInstance(
-            CommandSender.class.getClassLoader(),
-            new Class<?>[] {CommandSender.class},
-            (instance, method, arguments) -> {
-                if (method.getName().equals("hasPermission")) return true;
-                if (method.getName().equals("getName")) return "console";
-                if (method.getName().equals("sendMessage") && arguments != null) {
-                    for (final Object argument : arguments) {
-                        if (argument instanceof Component component) response.complete(component);
+        private final CommandSender sender;
+
+        private RespondingSender() {
+            this(true);
+        }
+
+        private RespondingSender(final boolean permitted) {
+            this.sender = (CommandSender) Proxy.newProxyInstance(
+                CommandSender.class.getClassLoader(),
+                new Class<?>[] {CommandSender.class},
+                (instance, method, arguments) -> {
+                    if (method.getName().equals("hasPermission")) return permitted;
+                    if (method.getName().equals("getName")) return "console";
+                    if (method.getName().equals("sendMessage") && arguments != null) {
+                        for (final Object argument : arguments) {
+                            if (argument instanceof Component component) response.complete(component);
+                        }
                     }
+                    if (method.getName().equals("equals")) return instance == arguments[0];
+                    if (method.getName().equals("hashCode")) return System.identityHashCode(instance);
+                    return defaultValue(method.getReturnType());
                 }
-                if (method.getName().equals("equals")) return instance == arguments[0];
-                if (method.getName().equals("hashCode")) return System.identityHashCode(instance);
-                return defaultValue(method.getReturnType());
-            }
-        );
+            );
+        }
     }
 
     private static Object defaultValue(final Class<?> type) {

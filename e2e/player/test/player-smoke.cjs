@@ -16,6 +16,7 @@ const { resolveCheckedArtifact } = require('./via-artifacts.cjs')
 const { literalChildren, literalChildrenAt } = require('./command-tree.cjs')
 const { assertCommandMatchesPath, assertRuntimeCoverage } = require('../../runtime-coverage.cjs')
 const { resolveBuildChild } = require('../../build-child-path.cjs')
+const { assertSuccessfulShutdown } = require('../../shutdown-log.cjs')
 const {
   closeLogStream,
   createChildProcessDeadline,
@@ -30,8 +31,6 @@ const OVERWORLD_ID = 'overworld'
 const IDENTITY_WORLD_ID = 'identitytarget'
 const LUCKPERMS_WARP = 'lpcontext'
 const LUCKPERMS_PERMISSION = 'worldmanagement.e2e.destination-warp'
-const SHUTDOWN_FAILURES = ['zip file error', 'I/O shutdown failed', 'did not drain']
-const SHUTDOWN_COMPLETE = 'WorldManagement terminal shutdown complete.'
 const PROJECT_ROOT = path.resolve(__dirname, '..', '..', '..')
 const activePaperProcesses = new Set()
 const suiteDeadline = createChildProcessDeadline(activePaperProcesses, 600000, 'Player E2E')
@@ -296,10 +295,10 @@ async function runPlayerFlow (attempt, clientVersion) {
   attempt.clientVersion = clientVersion
   try {
     await consoleCommand(attempt, `wm adopt ${OVERWORLD_ID}`, `世界 ${OVERWORLD_ID} 已加入管理`, 'adopt player fixture world', 'wm adopt <world>')
-    await consoleCommand(attempt, 'wm create teleporttarget NORMAL NORMAL', '世界 teleporttarget 已建立並加入管理', 'create teleport fixture', 'wm create <world> <environment> <world-type>')
-    await consoleCommand(attempt, 'wm create relocation NORMAL NORMAL', '世界 relocation 已建立並加入管理', 'create unload fixture', 'wm create <world> <environment> <world-type>')
-    await consoleCommand(attempt, 'wm create deletiontarget NORMAL NORMAL', '世界 deletiontarget 已建立並加入管理', 'create delete fixture', 'wm create <world> <environment> <world-type>')
-    await consoleCommand(attempt, `wm create ${IDENTITY_WORLD_ID} NORMAL NORMAL`, `世界 ${IDENTITY_WORLD_ID} 已建立並加入管理`, 'create identity fixture', 'wm create <world> <environment> <world-type>')
+    await consoleCommand(attempt, 'wm create teleporttarget NORMAL NORMAL --seed 1001 --no-structures --force-spawn-position 0,80,0', '世界 teleporttarget 已建立並加入管理', 'create teleport fixture', 'wm create <world> <environment> <world-type> <options>')
+    await consoleCommand(attempt, 'wm create relocation NORMAL NORMAL --seed 1002 --no-structures --force-spawn-position 0,80,0', '世界 relocation 已建立並加入管理', 'create unload fixture', 'wm create <world> <environment> <world-type> <options>')
+    await consoleCommand(attempt, 'wm create deletiontarget NORMAL NORMAL --seed 1003 --no-structures --force-spawn-position 0,80,0', '世界 deletiontarget 已建立並加入管理', 'create delete fixture', 'wm create <world> <environment> <world-type> <options>')
+    await consoleCommand(attempt, `wm create ${IDENTITY_WORLD_ID} NORMAL NORMAL --seed 1004 --no-structures --force-spawn-position 0,80,0`, `世界 ${IDENTITY_WORLD_ID} 已建立並加入管理`, 'create identity fixture', 'wm create <world> <environment> <world-type> <options>')
     await consoleCommand(attempt, 'wm ownership access teleporttarget mode WHITELIST', '世界存取設定已更新', 'restrict teleport fixture', 'wm ownership access <world> <operation> <value>')
     bot = await connectPlayer(attempt, clientVersion)
     phase = 'post-spawn'
@@ -312,9 +311,9 @@ async function runPlayerFlow (attempt, clientVersion) {
     await grantOperator(attempt, bot)
 
     await consoleCommand(
-      attempt, 'wm create detachedtarget NORMAL NORMAL',
+      attempt, 'wm create detachedtarget NORMAL NORMAL --seed 1005 --no-structures --force-spawn-position 0,80,0',
       '世界 detachedtarget 已建立並加入管理', 'create detached lifecycle fixture',
-      'wm create <world> <environment> <world-type>'
+      'wm create <world> <environment> <world-type> <options>'
     )
     await supportCommand(
       attempt, 'wme2e world create runtimefallback',
@@ -355,7 +354,7 @@ async function runPlayerFlow (attempt, clientVersion) {
     await assertPlayerWorld(attempt, bot, 'minecraft:detachedtarget', 'detached teleport target')
     await command(
       bot, '/wm unload detachedtarget runtimefallback',
-      '世界 detachedtarget 已unloaded', 'unknown runtime fallback relocation',
+      '世界 detachedtarget 已卸載', 'unknown runtime fallback relocation',
       'wm unload <world> <fallback>'
     )
     await assertPlayerWorld(attempt, bot, 'minecraft:runtimefallback', 'unknown runtime fallback world')
@@ -420,7 +419,7 @@ async function runPlayerFlow (attempt, clientVersion) {
     await command(bot, '/wm tp self relocation 200 90 200', '已傳送至世界 relocation', 'enter unload source world', 'wm tp self <world> <x> <y> <z>')
     await assertPlayerWorld(attempt, bot, 'minecraft:relocation', 'unload source world')
     await waitForPosition(bot, unloadSourcePosition, 'unload source position')
-    await command(bot, `/wm unload relocation ${OVERWORLD_ID}`, '世界 relocation 已unloaded', 'unload with player fallback', 'wm unload <world> <fallback>')
+    await command(bot, `/wm unload relocation ${OVERWORLD_ID}`, '世界 relocation 已卸載', 'unload with player fallback', 'wm unload <world> <fallback>')
     await assertPlayerWorld(attempt, bot, 'minecraft:overworld', 'unload fallback world')
     await waitUntilMovedFrom(bot, unloadSourcePosition, 'unload fallback relocation')
 
@@ -971,12 +970,9 @@ async function stopPaperAttempt (attempt) {
   if (paper.exitCode !== 0) {
     throw new Error(`${attempt.mode} Paper exited with ${paper.exitCode ?? paper.signalCode}.`)
   }
-  const shutdownLog = fs.readFileSync(logPath, 'utf8').slice(shutdownStart)
-  if (!shutdownLog.includes(SHUTDOWN_COMPLETE)) {
-    throw new Error(`${attempt.mode} Paper exited before WorldManagement terminal shutdown completed.`)
-  }
-  const shutdownFailure = SHUTDOWN_FAILURES.find(marker => shutdownLog.includes(marker))
-  if (shutdownFailure) throw new Error(`${attempt.mode} Paper shutdown reported '${shutdownFailure}'.`)
+  const attemptLog = fs.readFileSync(logPath, 'utf8')
+  assertSuccessfulShutdown(attemptLog.slice(shutdownStart), `${attempt.mode} Paper`)
+  assertSuccessfulShutdown(attemptLog, `${attempt.mode} Paper`)
 }
 
 async function restartPaperAttempt (attempt) {

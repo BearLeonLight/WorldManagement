@@ -13,7 +13,7 @@ disable-model-invocation: false
 ## 權威與限制
 
 - `AGENTS.md`、現有 `docs/`、設定檔與程式碼是權威；此流程不得覆蓋它們。
-- 先閱讀與症狀直接相關的文件、入口點、服務、測試及設定。`參考-舊設定/` 只能作為歷史輸入。
+- 先閱讀與症狀直接相關的現行文件、入口點、服務、測試及設定。已移除的開發期參考資料與 Git 歷史不能覆蓋現行契約。
 - 不得在 Paper 遊戲執行緒、指令、監聽器或 scheduler callback 建立阻塞診斷流程；不得以 `Future#get` 或 `join` 掩蓋問題。
 - 不得直接修改正式 YAML、JDBC 資料、world 內容或其他插件設定以測試假設。I/O、audit 與備份工作必須遵守 `PluginIoExecutor` 邊界。
 

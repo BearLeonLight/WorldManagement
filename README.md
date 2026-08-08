@@ -2,6 +2,8 @@
 
 WorldManagement 是面向 Paper 伺服器的世界管理插件，目標是提供安全的世界生命週期管理、世界內所有權與保護，以及 Warp 管理，同時避免在遊戲執行緒進行阻塞 I/O。
 
+目前正式版本為 `1.0.0`，也是插件設定、YAML metadata 與 JDBC schema 的初版契約。
+
 > 專案目前提供安全的受管世界 lifecycle、world identity replacement隔離與恢復、fallback player relocation、快取式保護、Warp、owner/rank/access 管理、audit policy，以及 YAML、SQLite、MySQL/MariaDB metadata provider。LuckPerms、Multiverse-Core 5、PlaceholderAPI與MiniPlaceholders為可選整合；兩套placeholder provider以短namespace `wm`公開只讀世界snapshot。
 
 ## 系統需求
@@ -65,11 +67,11 @@ WorldManagement 是面向 Paper 伺服器的世界管理插件，目標是提供
 .\gradlew.bat paperPlayerE2eTest
 ```
 
-Paper JAR 選擇參數與 `paperJarSmokeTest` 相同。Via fallback 預設動態使用目前 Mineflayer `testedVersions` 的最新版，也可用 `-PmineflayerMinecraftVersion=<version>` 只覆寫 fallback client；原生模式永遠使用 status ping 對應版本。必要的 `paperJarSmokeTest` 固定使用隔離 SQLite provider，console matrix 與玩家 E2E 使用 YAML provider；三者都會要求 terminal repository/audit/diagnostic close 的成功 marker，並將 classloader、I/O drain 或 shutdown timeout warning 視為失敗。player suite由Paper console的dimension與事件探針驗證實際registry world key、傳送、respawn及保護結果，不只比較Mineflayer快取或localized聊天文字。replacement respawn案例會以一次性的`PlayerRespawnEvent`測試目的地明確進入CONFLICT world，再確認production post-respawn relocation回到安全fallback；不依賴replacement UUID後可能失效的vanilla個人spawnpoint。console log 保留在 `build/console-command-test/latest.log`；player attempt logs 分別保留在 `build/player-e2e/native/latest.log` 與 `build/player-e2e/via-fallback/latest.log`，成功 attempt 另複製為 `build/player-e2e/latest.log`。Via與LuckPerms artifacts都快取於Gradle user home；console與原生協定判斷不會取得Via artifacts。
+Paper JAR 選擇參數與 `paperJarSmokeTest` 相同。Via fallback 預設動態使用目前 Mineflayer `testedVersions` 的最新版，也可用 `-PmineflayerMinecraftVersion=<version>` 只覆寫 fallback client；原生模式永遠使用 status ping 對應版本。必要的 `paperJarSmokeTest` 固定使用隔離 SQLite provider，console matrix 與玩家 E2E 使用 YAML provider；三者都會要求 terminal repository/audit/diagnostic close 的成功 marker，並將 classloader、I/O drain、shutdown timeout warning或Paper watchdog stall視為失敗。player suite的world fixtures使用固定seed、停用structures與forced spawn，避免把vanilla隨機spawn搜尋延遲混入指令契約，並由Paper console的dimension與事件探針驗證實際registry world key、傳送、respawn及保護結果，不只比較Mineflayer快取或localized聊天文字。replacement respawn案例會以一次性的`PlayerRespawnEvent`測試目的地明確進入CONFLICT world，再確認production post-respawn relocation回到安全fallback；不依賴replacement UUID後可能失效的vanilla個人spawnpoint。console log 保留在 `build/console-command-test/latest.log`；player attempt logs 分別保留在 `build/player-e2e/native/latest.log` 與 `build/player-e2e/via-fallback/latest.log`，成功 attempt 另複製為 `build/player-e2e/latest.log`。Via與LuckPerms artifacts都快取於Gradle user home；console與原生協定判斷不會取得Via artifacts。
 
 `e2e/command-runtime-coverage.txt` 將每個 Brigadier executable path 分類為 `CONSOLE_RUNTIME` 或 `PLAYER_RUNTIME`。JUnit 會把這份宣告與實際 command tree 做完整集合比對；新增 leaf 卻未分類、重複 path 或未知層級都會讓 `check` 失敗。兩個 runtime runner 也會分別驗證自己實際執行的 canonical leaf IDs，並在發送前比對 command literal skeleton、argument arity 與 aliases；不能以訊息 assertion 數量代替 leaf coverage。runtime task 會先執行純 Node harness tests，確認 leaf mapping 與 build child 目錄 guard，避免錯誤環境變數刪除 build 外路徑。
 
-可部署的 shaded JAR 位於 `build/libs/`，已內含 BoostedYAML、SQLite 與 MySQL JDBC driver，並 relocate BoostedYAML/SnakeYAML。將該 JAR 放入 Paper 伺服器的 `plugins/` 目錄，重新啟動伺服器。
+可部署的 shaded JAR 位於 `build/libs/WorldManagement-1.0.0.jar`，已內含 BoostedYAML、SQLite 與 MySQL JDBC driver，並 relocate BoostedYAML/SnakeYAML。將該 JAR 放入 Paper 伺服器的 `plugins/` 目錄，重新啟動伺服器。
 
 ## 基本操作範例
 
@@ -122,7 +124,7 @@ create flags可任意排序且不得重複。completion逐token提供尚未使�
 
 `unload`與`delete`的world completion會列出ACTIVE、DETACHED及目前唯一載入的unknown world；每次指令仍只操作一個指定世界，不是批次刪除。unknown loaded world執行unload時不建立metadata；執行delete時會先從exact runtime identity建立`DELETE_AUTO` DETACHED metadata，再走相同的安全刪除流程。
 
-`/wm list all`列出目前所有唯一載入的runtime world，並標示`ACTIVE`、`DETACHED`或`UNKNOWN`。只有runtime identity與metadata完全相符時才會標示ACTIVE或DETACHED；replacement、identity衝突及無metadata的世界都顯示UNKNOWN。此清單只讀事件維護的不可變snapshot，不讀取Bukkit world、YAML或資料庫。
+`/wm list all`列出目前所有唯一載入的runtime world，內建繁中會標示「受管」、「已停止管理」或「未知」。只有runtime identity與metadata完全相符時才會標示受管或已停止管理；replacement、identity衝突及無metadata的世界都顯示未知。持久化與診斷使用的機器值仍為`ACTIVE`、`DETACHED`與`UNKNOWN`。此清單只讀事件維護的不可變snapshot，不讀取Bukkit world、YAML或資料庫。
 
 對仍載入的世界執行`delete`時，第一次會搬離玩家、存檔並卸載；管理員確認狀態後必須再次執行相同指令。第二次會先要求Multiverse-Core停止追蹤，接著將storage移入quarantine、寫入`DELETING` tombstone，並在同一runtime永久刪除storage與metadata。若plugin已進入shutdown，durable tombstone與quarantine會保留，由下一次啟動recovery接續：
 
@@ -131,7 +133,7 @@ create flags可任意排序且不得重複。completion逐token提供尚未使�
 /wm delete survival world confirm
 ```
 
-當`/wm identity show <world>`回報`SYNC_PENDING`時使用`identity sync`接受非durable snapshot drift；回報`CONFLICT`代表觀察到replacement world，該世界會被隔離，需明確選擇是否保留舊Warp。無法接受replacement時可用`abandon`停止管理並保留metadata：
+當`/wm identity show <world>`回報「等待同步」時使用`identity sync`接受非durable snapshot drift；回報「衝突」代表觀察到replacement world，該世界會被隔離，需明確選擇是否保留舊Warp。對應的持久化機器值分別為`SYNC_PENDING`與`CONFLICT`。無法接受replacement時可用`abandon`停止管理並保留metadata：
 
 ```text
 /wm identity show survival
@@ -163,7 +165,7 @@ MiniPlaceholders使用`<wm_key>`，不是`<miniplaceholders:...>`。完整global
 WorldManagement 在 `INFO` 層級輸出精簡的啟動階段摘要：設定與 storage、metadata 數量、啟用模組與可選 hook capability，以及總啟動耗時。例如：
 
 ```text
-[WorldManagement] Enabling WorldManagement 0.1.0...
+[WorldManagement] Enabling WorldManagement 1.0.0...
 [WorldManagement]     Loading configuration and storage...
 [WorldManagement]     Configuration and storage loaded: YAML metadata storage, locale zh_TW. Took 18ms
 [WorldManagement]     Storage
@@ -196,7 +198,7 @@ WorldManagement 在 `INFO` 層級輸出精簡的啟動階段摘要：設定與 s
 [WorldManagement]         Protection listener registered
 [WorldManagement]         Lifecycle isolation listener registered
 [WorldManagement]     Services ready: commands, suggestions, audit, and listeners initialized. Took 6ms
-[WorldManagement] Enabled WorldManagement 0.1.0 with YAML metadata storage. Took 55ms
+[WorldManagement] Enabled WorldManagement 1.0.0 with YAML metadata storage. Took 55ms
 ```
 
 啟動日誌會列出每個受管世界的名稱及非敏感統計，但不會輸出資料庫 URL、帳密、玩家名稱或 UUID。可選整合會獨立顯示在 `Hooks`，不與服務初始化混在同一行。
@@ -229,16 +231,16 @@ WorldManagement 在 `INFO` 層級輸出精簡的啟動階段摘要：設定與 s
 - 可選 LuckPerms Warp外部權限整合；以已載入且identity相符的目的Bukkit world建立cached permission context，玩家名稱仍只由線上快照解析，WorldManagement rank不映射為LuckPerms group
 - 可選 Multiverse-Core 5.2.0以上lifecycle整合；`remove`與第二次confirmed `delete`在改變WorldManagement狀態前使用MV公開API解除追蹤、保留Bukkit runtime並驗證`worlds.yml`持久化，不相容API、remove或save失敗時fail closed且釋放該world operation
 - 可選PlaceholderAPI與MiniPlaceholders provider；共用`wm` namespace與immutable snapshot resolver，提供global、指定世界及玩家目前世界placeholder
-- `messages_zh_TW.yml` 使用 Adventure MiniMessage，集中管理全部指令回覆、可選共用前綴與逐語意訊息 key
+- `messages_zh_TW.yml` 使用 Adventure MiniMessage，集中管理全部指令回覆、可選共用前綴、逐語意訊息 key，以及可由 `<term:...>` 重用的領域詞彙
 - 玩家與 RCON 接收 Adventure Component；本機控制台以固定 ANSI 16 色呈現啟動摘要與指令回覆，Paper 檔案 log 保持純文字
-- 自訂 locale 缺少的 key 會從 JAR 內建 template 自動補入並保存；無效 key 只在執行時回退，不覆寫管理員內容
+- 自訂 locale 缺少的訊息或 `term.*` 詞彙會從 JAR 內建 template 自動補入並保存；無效 key 只在執行時回退，不覆寫管理員內容。詞彙固定以純文字 Component 插入，不能注入 MiniMessage 樣式或互動事件
 - `hooks.yml` 預設資源，設定啟動時會驗證 hook
 
 權限模型：`worldmanagement.bypass.protection`只用於保護與進入繞過，不提供ownership或Warp管理能力。全域管理分別使用`worldmanagement.admin.ownership.manage`與`worldmanagement.admin.warp.manage`，也可集中授予`worldmanagement.admin.*`。`owner set/remove`一律需要ownership管理員權限，世界owner不可自行轉讓或放棄。
 
 MySQL/MariaDB 的 adapter 可使用 [設定與 metadata](docs/configuration.md) 中的 property-gated integration test，對專用測試資料庫做實際連線驗證。
 
-完整架構計畫與目前交付差異請參考 [實作狀態](docs/implementation-status.md)。
+目前交付範圍、驗證基線與尚待補強項目請參考 [實作狀態](docs/implementation-status.md)。
 
 ## 外部世界工具
 
@@ -252,4 +254,3 @@ WorldManagement 的治理功能只套用於明確登錄的ACTIVE世界。`/wm ad
 - [指令架構](docs/command-architecture.md)
 - [設定與 metadata](docs/configuration.md)
 - [實作狀態](docs/implementation-status.md)
-- [舊版歷史參考](參考-舊設定/)

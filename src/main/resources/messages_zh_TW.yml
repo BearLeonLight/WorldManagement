@@ -1,3 +1,33 @@
+term:
+  management:
+    active: "受管"
+    detached: "已停止管理"
+    unknown: "未知"
+  environment:
+    normal: "主世界"
+    nether: "地獄"
+    the-end: "終界"
+    custom: "自訂"
+  identity:
+    verified: "已驗證"
+    sync-pending: "等待同步"
+    conflict: "衝突"
+  capability:
+    managed: "可管理"
+    external-only: "僅外部管理"
+  common:
+    none: "無"
+    yes: "是"
+    no: "否"
+  policy:
+    keep-warps: "保留世界傳送點"
+    clear-warps: "清除世界傳送點"
+  operation:
+    load: "載入"
+    unload: "卸載"
+  result:
+    loaded: "載入"
+    unloaded: "卸載"
 format:
   prefix: "<dark_gray>[<aqua>WorldManagement</aqua>]</dark_gray> "
 command:
@@ -23,13 +53,13 @@ command:
         detached:
           description: "接管已載入世界並保留為停止治理狀態。"
       load:
-        description: "載入已註冊世界，或以 detached 模式載入既有世界。"
+        description: "載入已註冊世界，或以 <term:management.detached> 模式載入既有世界。"
       unload:
-        description: "卸載已註冊或目前已載入的世界，可指定 fallback 世界。"
+        description: "卸載已註冊或目前已載入的世界，可指定備援世界。"
       remove:
-        description: "停止管理世界，或確認清除 detached metadata。"
+        description: "停止管理世界，或確認清除 <term:management.detached>世界的中繼資料。"
       manage:
-        description: "將 detached 世界重新加入管理。"
+        description: "將<term:management.detached>的世界重新加入管理。"
       import:
         description: "從既有世界目錄匯入世界。"
         detached:
@@ -43,7 +73,7 @@ command:
         sync:
           description: "同步待確認的世界識別快照。"
         accept-replacement:
-          description: "接受 replacement identity 並選擇 Warp 處理方式。"
+          description: "接受替代世界識別，並選擇世界傳送點的處理方式。"
         abandon:
           description: "停止管理識別異常的世界。"
       display-name:
@@ -53,13 +83,13 @@ command:
         reset:
           description: "重設世界顯示名稱。"
       tp:
-        description: "將自己或其他線上玩家傳送至 active 或 detached 世界。"
+        description: "將自己或其他線上玩家傳送至<term:management.active>或<term:management.detached>世界。"
         self:
-          description: "將自己傳送至 active 或 detached 世界。"
+          description: "將自己傳送至<term:management.active>或<term:management.detached>世界。"
         player:
-          description: "將指定線上玩家傳送至 active 或 detached 世界。"
+          description: "將指定線上玩家傳送至<term:management.active>或<term:management.detached>世界。"
         any:
-          description: "以明確 bypass 權限略過世界進入限制。"
+          description: "以明確的略過權限忽略世界進入限制。"
       warp:
         description: "管理與使用世界傳送點。"
         list:
@@ -95,17 +125,17 @@ command:
           toggle:
             description: "切換世界階級系統。"
         access:
-          description: "管理世界 access mode 與名單。"
+          description: "管理世界存取模式與名單。"
       storage:
-        description: "管理 metadata 儲存工具。"
+        description: "管理中繼資料儲存工具。"
         migrate:
-          description: "驗證並遷移 metadata provider。"
+          description: "驗證並遷移中繼資料儲存供應者。"
       list:
         description: "列出受管世界。"
         detached:
           description: "列出已停止管理的世界。"
         all:
-          description: "列出目前所有已載入的 runtime 世界與管理狀態。"
+          description: "列出目前所有已載入的執行中世界與管理狀態。"
   syntax:
     missing: "<prefix><red>指令缺少必要參數。</red>"
     invalid: "<prefix><red>指令包含無效的子指令或參數。</red>"
@@ -120,11 +150,11 @@ command:
     delete: "<prefix><red>你沒有刪除世界的權限。</red>"
     identity-show: "<prefix><red>你沒有查看世界識別資訊的權限。</red>"
     identity-sync: "<prefix><red>你沒有同步世界識別資訊的權限。</red>"
-    identity-accept: "<prefix><red>你沒有接受replacement world的權限。</red>"
+    identity-accept: "<prefix><red>你沒有接受替代世界識別的權限。</red>"
     identity-abandon: "<prefix><red>你沒有停止管理識別異常世界的權限。</red>"
     display-name-set: "<prefix><red>你沒有設定世界顯示名稱的權限。</red>"
     display-name-reset: "<prefix><red>你沒有重設世界顯示名稱的權限。</red>"
-    lifecycle: "<prefix><red>你沒有執行 <operation> 世界操作的權限。</red>"
+    lifecycle: "<prefix><red>你沒有執行<operation>世界操作的權限。</red>"
     tp: "<prefix><red>你沒有傳送至世界的權限。</red>"
     tp-others: "<prefix><red>你沒有傳送其他玩家的權限。</red>"
     tp-any: "<prefix><red>你沒有略過世界進入限制的權限。</red>"
@@ -135,8 +165,8 @@ command:
     started: "<prefix><yellow>正在建立世界 <white><world></white>...</yellow>"
     invalid: "<prefix><red>世界建立參數無效。</red>"
     success: "<prefix><green>世界 <white><world></white> 已建立並加入管理。</green>"
-    success-detached: "<prefix><green>世界 <white><world></white> 已建立，metadata 已保存但不套用 Warp、Ownership 與 Protection 管理。</green>"
-    already-exists: "<prefix><yellow>世界 <white><world></white> 已有 runtime 或 metadata，未重複建立。</yellow>"
+    success-detached: "<prefix><green>世界 <white><world></white> 已建立，中繼資料已保存但不套用世界傳送點、擁有權與保護管理。</green>"
+    already-exists: "<prefix><yellow>世界 <white><world></white> 已有執行中實例或中繼資料，未重複建立。</yellow>"
     operation-in-progress: "<prefix><yellow>世界 <white><world></white> 已有其他生命週期操作進行中。</yellow>"
     failure: "<prefix><red>建立世界 <white><world></white> 失敗，請檢查伺服器紀錄。</red>"
     backend-failure: "<prefix><red>建立世界 <white><world></white> 時發生內部錯誤，請檢查伺服器紀錄。</red>"
@@ -149,35 +179,35 @@ command:
     already-unloaded: "<prefix><yellow>世界 <white><world></white> 已經卸載。</yellow>"
     external-only: "<prefix><red>世界 <white><world></white> 由外部系統管理，WorldManagement 不執行此操作。</red>"
     operation-in-progress: "<prefix><yellow>世界 <white><world></white> 已有其他操作進行中。</yellow>"
-    fallback-unavailable: "<prefix><red>需要另一個已載入的 fallback 世界。</red>"
+    fallback-unavailable: "<prefix><red>需要另一個已載入的備援世界。</red>"
     players-present: "<prefix><red>世界 <white><world></white> 仍有玩家。</red>"
     save-failed: "<prefix><red>世界 <white><world></white> 存檔失敗，操作已取消。</red>"
     storage-not-found: "<prefix><red>找不到世界 <white><world></white> 的資料目錄。</red>"
   load:
     usage: "<gray>用法：</gray><white>/wm load <world> | /wm load <world> <NORMAL|NETHER|THE_END> --detached</white>"
     not-importable: "<prefix><red>世界 <white><world></white> 的資料目錄不可載入。</red>"
-    success-detached: "<prefix><green>世界 <white><world></white> 已載入，metadata 已保存但不套用治理。</green>"
-    already-exists: "<prefix><yellow>世界 <white><world></white> 已有 runtime 或 metadata，未重複載入。</yellow>"
+    success-detached: "<prefix><green>世界 <white><world></white> 已載入，中繼資料已保存但不套用治理。</green>"
+    already-exists: "<prefix><yellow>世界 <white><world></white> 已有執行中實例或中繼資料，未重複載入。</yellow>"
     operation-in-progress: "<prefix><yellow>世界 <white><world></white> 已有其他生命週期操作進行中。</yellow>"
     validation-failure: "<prefix><red>檢查世界 <white><world></white> 的資料目錄時發生錯誤，請檢查伺服器紀錄。</red>"
     failure: "<prefix><red>載入世界 <white><world></white> 失敗，請檢查伺服器紀錄。</red>"
     backend-failure: "<prefix><red>載入世界 <white><world></white> 時發生內部錯誤，請檢查伺服器紀錄。</red>"
   remove:
     usage: "<gray>用法：</gray><white>/wm remove <world> | /wm remove <world> purge confirm</white>"
-    success: "<prefix><green>世界 <white><world></white> 已停止管理，世界檔案與 metadata 仍保留。</green>"
-    tracking-removal-failed: "<prefix><red>Multiverse-Core 無法停止追蹤世界 <white><world></white>；WorldManagement 未變更 metadata 或 runtime。</red>"
+    success: "<prefix><green>世界 <white><world></white> <term:management.detached>，世界檔案與中繼資料仍保留。</green>"
+    tracking-removal-failed: "<prefix><red>Multiverse-Core 無法停止追蹤世界 <white><world></white>；WorldManagement 未變更中繼資料或執行中實例。</red>"
     failure: "<prefix><red>無法移除世界 <white><world></white>。</red>"
     not-managed: "<prefix><red>世界 <white><world></white> 不在管理中。</red>"
     operation-in-progress: "<prefix><yellow>世界 <white><world></white> 已有其他操作進行中。</yellow>"
     not-unloaded: "<prefix><red>世界 <white><world></white> 必須先卸載才能完成此操作。</red>"
     backend-failure: "<prefix><red>移除世界 <white><world></white> 的管理狀態時發生內部錯誤，請檢查伺服器紀錄。</red>"
-    purge-success: "<prefix><green>已永久清除已停止管理世界 <white><world></white> 的 metadata。</green>"
-    purge-failure: "<prefix><red>只能清除已停止管理世界的 metadata。</red>"
-    purge-backend-failure: "<prefix><red>清除世界 <white><world></white> 的 metadata 時發生內部錯誤，請檢查伺服器紀錄。</red>"
+    purge-success: "<prefix><green>已永久清除<term:management.detached>世界 <white><world></white> 的中繼資料。</green>"
+    purge-failure: "<prefix><red>只能清除<term:management.detached>世界的中繼資料。</red>"
+    purge-backend-failure: "<prefix><red>清除世界 <white><world></white> 的中繼資料時發生內部錯誤，請檢查伺服器紀錄。</red>"
   manage:
     usage: "<gray>用法：</gray><white>/wm manage <world></white>"
     success: "<prefix><green>世界 <white><world></white> 已重新加入管理。</green>"
-    identity-mismatch: "<prefix><red>世界 <white><world></white> 目前載入的識別與 metadata 不符，未重新加入管理。</red>"
+    identity-mismatch: "<prefix><red>世界 <white><world></white> 目前載入的識別與中繼資料不符，未重新加入管理。</red>"
     operation-in-progress: "<prefix><yellow>世界 <white><world></white> 已有其他生命週期操作進行中。</yellow>"
     failure: "<prefix><red>世界 <white><world></white> 不在已停止管理清單中。</red>"
     backend-failure: "<prefix><red>重新管理世界 <white><world></white> 時發生內部錯誤，請檢查伺服器紀錄。</red>"
@@ -185,8 +215,8 @@ command:
     usage: "<gray>用法：</gray><white>/wm import <world> <NORMAL|NETHER|THE_END> [--detached]</white>"
     not-importable: "<prefix><red>世界目錄不可匯入。</red>"
     success: "<prefix><green>世界 <white><world></white> 已匯入並加入管理。</green>"
-    success-detached: "<prefix><green>世界 <white><world></white> 已匯入，metadata 已保存但不套用治理。</green>"
-    already-exists: "<prefix><yellow>世界 <white><world></white> 已有 runtime 或 metadata，未重複匯入。</yellow>"
+    success-detached: "<prefix><green>世界 <white><world></white> 已匯入，中繼資料已保存但不套用治理。</green>"
+    already-exists: "<prefix><yellow>世界 <white><world></white> 已有執行中實例或中繼資料，未重複匯入。</yellow>"
     operation-in-progress: "<prefix><yellow>世界 <white><world></white> 已有其他生命週期操作進行中。</yellow>"
     validation-failure: "<prefix><red>檢查世界 <white><world></white> 的匯入目錄時發生錯誤，請檢查伺服器紀錄。</red>"
     failure: "<prefix><red>匯入世界 <white><world></white> 失敗，請檢查伺服器紀錄。</red>"
@@ -198,7 +228,7 @@ command:
     tracking-removal-failed: "<prefix><red>Multiverse-Core 無法停止追蹤世界 <white><world></white>；尚未隔離或刪除世界資料。</red>"
     unloaded-requires-confirmation: "<prefix><yellow>世界 <white><world></white> 已完成存檔並卸載。請再次執行相同刪除指令以永久刪除。</yellow>"
     reloaded: "<prefix><yellow>世界 <white><world></white> 在刪除流程中被重新載入，已中止刪除並保留資料。</yellow>"
-    reloaded-after-tombstone: "<prefix><red>世界 <white><world></white> 在刪除狀態保存後被重新載入；runtime 已隔離，請停止伺服器並檢查 live world 與 quarantine 資料。</red>"
+    reloaded-after-tombstone: "<prefix><red>世界 <white><world></white> 在刪除狀態保存後被重新載入；執行中實例已隔離，請停止伺服器並檢查現行世界與隔離區資料。</red>"
     failure: "<prefix><red>無法刪除世界 <white><world></white>。</red>"
     players-present: "<prefix><red>世界 <white><world></white> 仍有玩家，無法刪除。</red>"
     not-managed: "<prefix><red>世界 <white><world></white> 不在管理中。</red>"
@@ -206,30 +236,31 @@ command:
     storage-not-found: "<prefix><red>找不到世界 <white><world></white> 的資料目錄。</red>"
     unload-failed: "<prefix><red>無法卸載世界 <white><world></white>。</red>"
     metadata-failed: "<prefix><red>無法更新世界 <white><world></white> 的刪除狀態；資料已保留或還原，請檢查伺服器紀錄。</red>"
-    fallback-unavailable: "<prefix><red>刪除前需要另一個已載入的 fallback 世界。</red>"
+    fallback-unavailable: "<prefix><red>刪除前需要另一個已載入的備援世界。</red>"
     identity-not-verified: "<prefix><red>世界 <white><world></white> 的識別尚未驗證，不能刪除。</red>"
     external-only: "<prefix><red>世界 <white><world></white> 由外部系統管理生命週期，WorldManagement 不會刪除。</red>"
     operation-in-progress: "<prefix><yellow>世界 <white><world></white> 已有其他生命週期操作進行中。</yellow>"
   identity:
     usage: "<gray>用法：</gray><white>/wm identity show <world> | sync <world> | accept-replacement <world> confirm <clear-warps|keep-warps> | abandon <world> confirm</white>"
-    not-managed: "<prefix><red>世界 <white><world></white> 沒有 WorldManagement metadata。</red>"
-    show: "<aqua>世界識別：</aqua><white><world></white> <gray>| key:</gray> <white><key></white> <gray>| UUID:</gray> <white><uuid></white> <gray>| environment:</gray> <white><environment></white> <gray>| seed:</gray> <white><seed></white> <gray>| structures:</gray> <white><structures></white> <gray>| state:</gray> <white><state></white> <gray>| capability:</gray> <white><capability></white> <gray>| pending:</gray> <white><pending></white>"
+    not-managed: "<prefix><red>世界 <white><world></white> 沒有 WorldManagement 中繼資料。</red>"
+    show: "<aqua>世界識別：</aqua><white><world></white> <gray>| Paper 鍵：</gray><white><key></white> <gray>| UUID：</gray><white><uuid></white> <gray>| 環境：</gray><white><environment></white> <gray>| 種子：</gray><white><seed></white> <gray>| 生成結構：</gray><white><structures></white> <gray>| 狀態：</gray><white><state></white> <gray>| 生命週期能力：</gray><white><capability></white> <gray>| 待確認觀察：</gray><white><pending></white>"
+    pending-summary: "Paper 鍵=<key>，UUID=<uuid>，環境=<environment>，種子=<seed>，生成結構=<structures>"
     sync:
-      success: "<prefix><green>世界 <white><world></white> 的pending identity snapshot已同步。</green>"
-      not-pending: "<prefix><red>世界 <white><world></white> 目前不是SYNC_PENDING，不能同步。</red>"
-      stale: "<prefix><yellow>世界 <white><world></white> 的pending identity已變更，請重新檢查後再執行。</yellow>"
+      success: "<prefix><green>世界 <white><world></white> 的待確認識別快照已同步。</green>"
+      not-pending: "<prefix><red>世界 <white><world></white> 目前不是<term:identity.sync-pending>狀態，不能同步。</red>"
+      stale: "<prefix><yellow>世界 <white><world></white> 的待確認識別已變更，請重新檢查後再執行。</yellow>"
       failure: "<prefix><red>無法同步世界 <white><world></white> 的識別資訊。</red>"
     accept:
-      success: "<prefix><green>已接受世界 <white><world></white> 的replacement identity；Warp policy：<white><policy></white>。</green>"
-      not-conflict: "<prefix><red>世界 <white><world></white> 目前不是CONFLICT，不能接受replacement。</red>"
-      index-conflict: "<prefix><red>Replacement identity與其他metadata的Paper key或UUID衝突，未進行任何變更。</red>"
-      stale: "<prefix><yellow>世界 <white><world></white> 的replacement identity已變更，請重新檢查後再執行。</yellow>"
-      failure: "<prefix><red>無法接受世界 <white><world></white> 的replacement identity。</red>"
+      success: "<prefix><green>已接受世界 <white><world></white> 的替代世界識別；世界傳送點處理方式：<white><policy></white>。</green>"
+      not-conflict: "<prefix><red>世界 <white><world></white> 目前不是<term:identity.conflict>狀態，不能接受替代世界識別。</red>"
+      index-conflict: "<prefix><red>替代世界識別與其他中繼資料的 Paper 鍵或 UUID 衝突，未進行任何變更。</red>"
+      stale: "<prefix><yellow>世界 <white><world></white> 的替代世界識別已變更，請重新檢查後再執行。</yellow>"
+      failure: "<prefix><red>無法接受世界 <white><world></white> 的替代世界識別。</red>"
     abandon:
-      success: "<prefix><green>世界 <white><world></white> 的metadata已轉為DETACHED；runtime world與檔案未變更。</green>"
-      not-allowed: "<prefix><red>只能停止管理處於SYNC_PENDING或CONFLICT的ACTIVE metadata。</red>"
-      stale: "<prefix><yellow>世界 <white><world></white> 的identity state已變更，請重新檢查後再執行。</yellow>"
-      failure: "<prefix><red>無法停止管理世界 <white><world></white> 的metadata。</red>"
+      success: "<prefix><green>世界 <white><world></white> 的中繼資料已轉為<term:management.detached>；執行中世界與檔案未變更。</green>"
+      not-allowed: "<prefix><red>只能停止管理處於<term:identity.sync-pending>或<term:identity.conflict>狀態的<term:management.active>中繼資料。</red>"
+      stale: "<prefix><yellow>世界 <white><world></white> 的識別狀態已變更，請重新檢查後再執行。</yellow>"
+      failure: "<prefix><red>無法停止管理世界 <white><world></white> 的中繼資料。</red>"
   display-name:
     usage: "<gray>用法：</gray><white>/wm display-name set <world> <display-name...> | reset <world></white>"
     not-managed: "<prefix><red>世界 <white><world></white> 不在管理中。</red>"
@@ -244,17 +275,17 @@ command:
     source-not-active: "<prefix><red>來源必須是目前啟用的儲存供應者。</red>"
     same-provider: "<prefix><red>來源與目標儲存供應者必須不同。</red>"
     target-not-configured: "<prefix><red>目標儲存供應者尚未設定連線資訊。</red>"
-    target-not-empty: "<prefix><red>目標儲存已有 metadata；為避免覆寫，未開始遷移。</red>"
-    success: "<prefix><green>已遷移 <count> 筆世界 metadata。請更新 storage.provider 並重新啟動以啟用目標儲存。</green>"
+    target-not-empty: "<prefix><red>目標儲存已有中繼資料；為避免覆寫，未開始遷移。</red>"
+    success: "<prefix><green>已遷移 <count> 筆世界中繼資料。請更新 storage.provider 並重新啟動以啟用目標儲存。</green>"
     failure: "<prefix><red>儲存遷移失敗，請檢查伺服器紀錄。</red>"
   world-name-invalid: "<prefix><red>世界名稱無效。</red>"
   adopt:
     usage: "<gray>用法：</gray><white>/wm adopt <world> [--detached]</white>"
     loaded-only: "<prefix><red>只能接管已載入的世界。</red>"
-    started: "<prefix><yellow>正在登錄世界 <white><world></white> 的 metadata...</yellow>"
-    failure: "<prefix><red>無法登錄世界 metadata，請檢查伺服器紀錄。</red>"
+    started: "<prefix><yellow>正在登錄世界 <white><world></white> 的中繼資料...</yellow>"
+    failure: "<prefix><red>無法登錄世界中繼資料，請檢查伺服器紀錄。</red>"
     success: "<prefix><green>世界 <white><world></white> 已加入管理。</green>"
-    success-detached: "<prefix><green>世界 <white><world></white> 已登錄，metadata 已保存但不套用治理。</green>"
+    success-detached: "<prefix><green>世界 <white><world></white> 已登錄，中繼資料已保存但不套用治理。</green>"
     already-managed: "<prefix><yellow>世界 <white><world></white> 已在管理中。</yellow>"
     operation-in-progress: "<prefix><yellow>世界 <white><world></white> 已有其他生命週期操作進行中。</yellow>"
     backend-failure: "<prefix><red>登錄世界 <white><world></white> 時發生內部錯誤，請檢查伺服器紀錄。</red>"

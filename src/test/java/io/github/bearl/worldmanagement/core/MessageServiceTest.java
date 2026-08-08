@@ -1,6 +1,7 @@
 package io.github.bearl.worldmanagement.core;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import java.io.ByteArrayInputStream;
@@ -20,6 +21,159 @@ final class MessageServiceTest {
 
     @TempDir
     Path temporaryDirectory;
+
+        @Test
+        void resolvesBundledLocaleTermsInsideMessageTemplates() {
+                final String bundled = """
+                        term:
+                            management:
+                                detached: '已停止管理'
+                        command:
+                            status: '<yellow>狀態：<term:management.detached></yellow>'
+                        """;
+
+                final MessageService messages = MessageService.load(
+                        temporaryDirectory,
+                        "zh_TW",
+                        new ByteArrayInputStream(bundled.getBytes(StandardCharsets.UTF_8)),
+                        warning -> { }
+                );
+
+                assertEquals(
+                        MiniMessage.miniMessage().deserialize("<yellow>狀態：已停止管理</yellow>"),
+                        messages.component("command.status")
+                );
+        }
+
+        @Test
+        void insertsConfiguredLocaleTermsAsPlainText() throws Exception {
+                Files.writeString(temporaryDirectory.resolve("messages_zh_TW.yml"), """
+                        term:
+                            management:
+                                detached: '<red>自訂狀態</red>'
+                        command:
+                            status: '<yellow>狀態：<term:management.detached></yellow>'
+                        """);
+                final String bundled = """
+                        term:
+                            management:
+                                detached: '已停止管理'
+                        command:
+                            status: '<yellow>狀態：<term:management.detached></yellow>'
+                        """;
+
+                final MessageService messages = MessageService.load(
+                        temporaryDirectory,
+                        "zh_TW",
+                        new ByteArrayInputStream(bundled.getBytes(StandardCharsets.UTF_8)),
+                        warning -> { }
+                );
+
+                assertEquals(
+                        Component.text("狀態：<red>自訂狀態</red>", net.kyori.adventure.text.format.NamedTextColor.YELLOW),
+                        messages.component("command.status")
+                );
+        }
+
+                @Test
+                void addsMissingBundledTermsToAnExistingLocale() throws Exception {
+                    Files.writeString(
+                        temporaryDirectory.resolve("messages_zh_TW.yml"),
+                        "command:\n  status: '<term:management.detached>'\n"
+                    );
+                    final String bundled = """
+                        term:
+                          management:
+                            detached: '已停止管理'
+                        command:
+                          status: '<term:management.detached>'
+                        """;
+
+                    final MessageService messages = MessageService.load(
+                        temporaryDirectory,
+                        "zh_TW",
+                        new ByteArrayInputStream(bundled.getBytes(StandardCharsets.UTF_8)),
+                        warning -> { }
+                    );
+
+                    assertEquals(Component.text("已停止管理"), messages.component("command.status"));
+                    assertTrue(Files.readString(temporaryDirectory.resolve("messages_zh_TW.yml"))
+                        .contains("detached: 已停止管理"));
+                }
+
+                @Test
+                void fallsBackWhenConfiguredTemplateUsesUnknownLocaleTerm() throws Exception {
+                    Files.writeString(
+                        temporaryDirectory.resolve("messages_zh_TW.yml"),
+                        "command:\n  status: '<term:management.missing>'\n"
+                    );
+                    final List<String> warnings = new ArrayList<>();
+                    final String bundled = """
+                        term:
+                          management:
+                            detached: '已停止管理'
+                        command:
+                          status: '<term:management.detached>'
+                        """;
+
+                    final MessageService messages = MessageService.load(
+                        temporaryDirectory,
+                        "zh_TW",
+                        new ByteArrayInputStream(bundled.getBytes(StandardCharsets.UTF_8)),
+                        warnings::add
+                    );
+
+                    assertTrue(warnings.stream().anyMatch(warning -> warning.contains("management.missing")));
+                    assertEquals(Component.text("已停止管理"), messages.component("command.status"));
+                }
+
+            @Test
+            void fallsBackWhenConfiguredLocaleTermTagHasInvalidArguments() throws Exception {
+                    Files.writeString(temporaryDirectory.resolve("messages_zh_TW.yml"), """
+                            command:
+                                missing: '<term>'
+                                extra: '<term:management.detached:extra>'
+                            """);
+                    final List<String> warnings = new ArrayList<>();
+                    final String bundled = """
+                            term:
+                                management:
+                                    detached: '已停止管理'
+                            command:
+                                missing: '<term:management.detached>'
+                                extra: '<term:management.detached>'
+                            """;
+
+                    final MessageService messages = MessageService.load(
+                            temporaryDirectory,
+                            "zh_TW",
+                            new ByteArrayInputStream(bundled.getBytes(StandardCharsets.UTF_8)),
+                            warnings::add
+                    );
+
+                    assertEquals(Component.text("已停止管理"), messages.component("command.missing"));
+                    assertEquals(Component.text("已停止管理"), messages.component("command.extra"));
+                    assertEquals(2, warnings.stream().filter(warning -> warning.contains("Invalid locale message")).count());
+            }
+
+            @Test
+            void rejectsUnknownProgrammaticLocaleTerm() {
+                    final String bundled = """
+                            term:
+                                management:
+                                    detached: '已停止管理'
+                            command:
+                                status: '<term:management.detached>'
+                            """;
+                    final MessageService messages = MessageService.load(
+                            temporaryDirectory,
+                            "zh_TW",
+                            new ByteArrayInputStream(bundled.getBytes(StandardCharsets.UTF_8)),
+                            warning -> { }
+                    );
+
+                    assertThrows(IllegalArgumentException.class, () -> messages.termComponent("management.missing"));
+            }
 
     @Test
     void loadsConfiguredLocaleAsMiniMessageComponent() throws Exception {

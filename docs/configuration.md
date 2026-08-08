@@ -113,13 +113,35 @@ storage-migration:
 plugins/WorldManagement/worlds/<world>.yml
 ```
 
-目前 YAML metadata schema 為 3；載入時會先 preflight 全部頂層 metadata YAML，任何 future schema 都會在修改前 fail closed。存在 schema 1/2 時，I/O executor 會先把全部 metadata YAML 複製到唯一 `worlds/backup/schema-*` snapshot，再逐檔重寫為 schema 3。`world-key` 固定為 `minecraft:<lowercase-id>`；`management-state` 與 `desired-state` 分別保存管理狀態與 runtime intent：
+正式版 `1.0.0` 的 YAML metadata schema 為 1。這個初版 schema 已包含完整 identity、creation provenance、deletion transaction、registration source、治理資料與 Warp。載入時會先 preflight 全部頂層 metadata YAML；schema 2 以上會在修改任何檔案前 fail closed。schema 1 缺少必要欄位或內容無效時視為毀損資料，不會以開發期預設值補齊。
+
+`world-id` 是符合 `^[a-zA-Z0-9_-]+$` 的 canonical ID；`identity.accepted.paper-key` 保存 Paper registry key。`management-state` 與 `desired-state` 分別保存管理狀態與 runtime intent。以下是省略玩家與 Warp 項目的完整結構：
 
 ```yaml
-schema-version: 3
-world-name: creative
-world-key: minecraft:creative
+schema-version: 1
+world-id: creative
+display-name: creative
+identity:
+  accepted:
+    paper-key: minecraft:creative
+    world-uuid: 11111111-1111-1111-1111-111111111111
+    environment: NORMAL
+    seed: 42
+    generate-structures: true
+  verification-state: VERIFIED
+  lifecycle-capability: MANAGED
+  pending:
+    present: false
+creation:
+  requested-world-type: NONE
+  generator:
+    present: false
+  biome-provider:
+    present: false
 management-state: ACTIVE
+deletion:
+  transaction-id: NONE
+registration-source: STANDARD
 desired-state: LOADED
 owner: server
 version: 0
@@ -141,9 +163,11 @@ warps: {}
 
 每個`warps.<name>`項目會保存座標、yaw/pitch、`PUBLIC|PRIVATE` visibility、trusted players/ranks與`required-permission`。`required-permission`預設為空；目前command只建立空值，沒有直接修改此欄位的管理指令。若由受控migration或管理工具提供非空值，只有已載入且identity相符的目的world可進行外部權限查詢。
 
-`version` 由 repository 用於 optimistic version 檢查，管理員不得手動降低它。future config/metadata/JDBC schema 會 fail closed；無效 UUID、遺失 `OWNER`/`GUEST`，或指向不存在 rank 的玩家映射會被視為無法載入的 metadata。
+`version` 是單筆 aggregate 的 optimistic-lock revision，不是插件或檔案格式版本，管理員不得手動降低它。config、YAML metadata 與 JDBC schema 都以 1 為初版；future schema 會 fail closed。無效 UUID、遺失 `OWNER`/`GUEST`，或指向不存在 rank 的玩家映射會被視為無法載入的 metadata。
 
-JDBC schema upgrade 前會先在 `plugins/WorldManagement/backups/schema/` 建立備份。SQLite 使用原生 `VACUUM INTO` 產生一致 `.db` snapshot；MySQL/MariaDB 在 repeatable-read transaction 中將 metadata 與 audit rows 匯出為 UTF-8 JSONL，並建立含 row count 與每個檔案 SHA-256 的 manifest，同時以 database advisory lock 序列化 migration。任一備份失敗會中止 schema upgrade；DDL 完成後才更新 version marker；新建 current-schema database 不建立空備份。
+JDBC 初版會建立並驗證 `worldmanagement_schema_version`、`worldmanagement_worlds` 與 `worldmanagement_audit` 三個 table；schema marker 必須恰好有一筆 version 1，table 欄位、nullability 與 primary key 也必須完全符合契約。插件不會自動升級、修補或備份非初版 JDBC schema。`/wm storage migrate` 是不同 provider 間的明確 aggregate copy，不是 schema upgrade。
+
+`1.0.0` 不承諾相容開發期間曾產生的 YAML schema 2 至 5 或其他實驗性 JDBC layout。這些資料必須在部署正式版前於離線環境另行轉換，或使用全新的 plugin data directory；正式伺服器資料不可直接以文字取代 schema marker。
 
 SQLite 已由測試驗證。MySQL/MariaDB 使用相同 JDBC adapter，需在目標伺服器提供 JDBC URL 和帳密。可用專用測試資料庫執行實際 adapter 驗證：
 
@@ -245,9 +269,13 @@ PlaceholderAPI只輸出純文字，因此顯示名稱中的MiniMessage格式不�
 
 程式提供的 `<world>`、`<warp>`、`<player>`、`<rank>`、`<provider>`、清單與其他動態 placeholder 永遠以 unparsed 純文字 Component 插入。即使動態值包含 `<red>` 或 `<click:...>`，也不會取得 MiniMessage 樣式或互動事件。
 
-每個自訂 key 只能使用對應內建 template 已定義的動態 placeholder。placeholder 拼錯、加入未知 tag、或 MiniMessage 結構無效時，該 key 會記錄警告並回退 JAR 內建繁中 template；其他合法 key 不受影響。
+`term.*` 區段定義同一 locale 可重用的領域詞彙；template 以 `<term:完整鍵>` 引用，例如 `<term:management.detached>`。完整鍵保留語意分類，避免不同領域的 `unknown` 或 `managed` 發生碰撞。詞彙值固定以純文字 Component 插入，不會再次解析 MiniMessage，也不能引用另一個 term；因此自訂值中的 `<red>`、click 或 hover 只會顯示為文字。程式動態插入的世界環境、管理狀態、identity 狀態、lifecycle capability、lifecycle operation/result 與明確 policy 同樣讀取這份詞彙表。
 
-啟動時會在 `PluginIoExecutor` 讀取並驗證 JAR 內建 template 與 data folder 自訂 locale。自訂檔缺少 key 時，WorldManagement 會將 JAR 內建預設值補入 YAML 並保存，既有自訂值不會被覆蓋。單一 template 無法解析時會記錄檔名、key、template 與解析原因，只在本次執行回退到 JAR 內建繁中 template，不會覆寫管理員原始內容；其他合法 key 照常使用。內建 template 無效代表插件發行內容損壞，插件會停止啟用。
+指令 literal、flag、option value、permission、設定鍵、持久化 enum、audit action、diagnostics，以及 PlaceholderAPI／MiniPlaceholders 的機器值不套用 locale 詞彙。這些識別值維持穩定英文；只有玩家可見的訊息與動態狀態本地化。
+
+每個自訂 key 只能使用對應內建 template 已定義的動態 placeholder，且 `<term:...>` 必須提供恰好一個 bundled 詞彙鍵。placeholder 拼錯、引用未知 term、term 參數格式錯誤、加入未知 tag，或 MiniMessage 結構無效時，該 key 會記錄警告並回退 JAR 內建繁中 template；其他合法 key 不受影響。
+
+啟動時會在 `PluginIoExecutor` 讀取並驗證 JAR 內建 template、bundled 詞彙與 data folder 自訂 locale。自訂檔缺少訊息或 `term.*` key 時，WorldManagement 會將 JAR 內建預設值補入 YAML 並保存，既有自訂值不會被覆蓋。舊 template 沒有使用 `<term:...>` 時仍保留原文，不會被強制改寫。單一 template 無法解析時會記錄檔名、key、template 與解析原因，只在本次執行回退到 JAR 內建繁中 template，不會覆寫管理員原始內容；其他合法 key 照常使用。內建 template 或其詞彙引用無效代表插件發行內容損壞，插件會停止啟用。
 
 玩家與 RCON 直接接收 Adventure Component，由 Paper 負責能力降級。本機控制台的啟動摘要與指令回覆固定序列化為 ANSI 16 色，支援 Windows Terminal、PowerShell 及其他 ANSI 終端；Paper 的 rolling log appender 會移除 ANSI escape，`logs/latest.log` 仍保持純文字。`ProxiedCommandSender` 的回覆依 Paper 的 caller audience 轉送；最終 caller 是玩家時使用該玩家的 entity scheduler，否則使用 global scheduler。循環 proxy 不會遞迴發送。
 

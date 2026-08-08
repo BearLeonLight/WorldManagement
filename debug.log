@@ -1,2 +1,0 @@
-[0728/182640.822:ERROR:third_party\crashpad\crashpad\util\win\registration_protocol_win.cc:108] CreateFile: 系統找不到指定的檔案。 (0x2)
-[0728/182643.066:ERROR:third_party\crashpad\crashpad\util\win\registration_protocol_win.cc:108] CreateFile: 系統找不到指定的檔案。 (0x2)

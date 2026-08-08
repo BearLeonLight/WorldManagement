@@ -1,6 +1,6 @@
 {
   "name": "worldmanagement-player-e2e",
-  "version": "0.1.0",
+  "version": "1.0.0",
   "private": true,
   "description": "Optional Mineflayer black-box tests for WorldManagement",
   "scripts": {
@@ -14,6 +14,6 @@
     "minecraft-data": "3.111.0",
     "minecraft-protocol": "1.66.2",
     "mineflayer": "4.37.1",
-    "yaml": "2.8.1"
+    "yaml": "2.9.0"
   }
 }

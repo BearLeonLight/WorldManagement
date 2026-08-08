@@ -41,11 +41,8 @@ final class WorldListMessageRenderer {
             .sorted(Comparator.comparing(entry -> entry.world().name()))
             .map(entry -> messages.component("command.list.all-entry", Map.of(
                 "world", Component.text(entry.world().name()),
-                "environment", Component.text(
-                    entry.world().identity().environment().name(),
-                    environmentColor(entry.world().identity().environment())
-                ),
-                "status", Component.text(entry.status().name(), entry.status().color())
+                "environment", environmentComponent(entry.world().identity().environment()),
+                "status", messages.termComponent(statusTerm(entry.status())).color(entry.status().color())
             )))
             .forEach(result::add);
         return List.copyOf(result);
@@ -60,8 +57,29 @@ final class WorldListMessageRenderer {
         }
         return messages.component("command.list.entry", Map.of(
             "name", displayName,
-            "type", Component.text(metadata.identity().environment().name(), environmentColor(metadata.identity().environment()))
+            "type", environmentComponent(metadata.identity().environment())
         ));
+    }
+
+    private Component environmentComponent(final WorldEnvironment environment) {
+        return messages.termComponent(environmentTerm(environment)).color(environmentColor(environment));
+    }
+
+    private static String environmentTerm(final WorldEnvironment environment) {
+        return switch (environment) {
+            case NORMAL -> "environment.normal";
+            case NETHER -> "environment.nether";
+            case THE_END -> "environment.the-end";
+            case CUSTOM -> "environment.custom";
+        };
+    }
+
+    private static String statusTerm(final LoadedStatus status) {
+        return switch (status) {
+            case ACTIVE -> "management.active";
+            case DETACHED -> "management.detached";
+            case UNKNOWN -> "management.unknown";
+        };
     }
 
     private static NamedTextColor environmentColor(final WorldEnvironment environment) {

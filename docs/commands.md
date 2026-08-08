@@ -20,15 +20,17 @@
 
 權限：`worldmanagement.command.list`，預設 OP。
 
-無參數時列出 WorldManagement 記憶體快取中的ACTIVE世界；加入`detached`可列出已停止管理、但仍保留metadata的世界。這兩種清單使用`<world-id或顯示名稱> - <NORMAL|NETHER|THE_END|CUSTOM>`格式逐行顯示；設定顯示名稱後以該名稱為主，游標停留時顯示不可變的world ID。
+無參數時列出 WorldManagement 記憶體快取中的ACTIVE世界；加入`detached`可列出已停止管理、但仍保留metadata的世界。這兩種清單使用`<world-id或顯示名稱> - <本地化 environment>`格式逐行顯示；內建繁中對應為「主世界」、「地獄」、「終界」與「自訂」。設定顯示名稱後以該名稱為主，游標停留時顯示不可變的world ID。
 
-加入`all`時列出事件維護的不可變snapshot中所有唯一loaded runtime worlds，格式為`<world-id> - <environment> - <ACTIVE|DETACHED|UNKNOWN>`。只有runtime identity與metadata完全相符時才標示ACTIVE或DETACHED；replacement、identity衝突及無metadata世界一律標示UNKNOWN。三種模式都不讀取YAML、SQL或可變Bukkit world。
+加入`all`時列出事件維護的不可變snapshot中所有唯一loaded runtime worlds，格式為`<world-id> - <本地化 environment> - <本地化管理狀態>`。內建繁中分別顯示「受管」、「已停止管理」與「未知」；只有runtime identity與metadata完全相符時才標示受管或已停止管理，replacement、identity衝突及無metadata世界一律標示未知。三種模式都不讀取YAML、SQL或可變Bukkit world。
 
 ## 訊息輸出
 
 所有 `/wm`、root alias 與 module alias 回覆都使用 Adventure Component，內容由 `messages_<locale>.yml` 的 MiniMessage template 控制。控制台與 RCON 由 Paper 正常呈現或降級；代理指令依最終 caller audience 選擇正確的 player entity scheduler 或 global scheduler。
 
-管理員可在 template 使用完整 MiniMessage 標籤。命令參數、metadata 名稱、玩家名稱、UUID 與清單等動態值固定以純文字 placeholder 插入，不能注入顏色、click 或 hover 事件。自訂 locale 的單一 key 缺失或無效時，只回退該 key 到 JAR 內建繁中 template。
+管理員可在 template 使用完整 MiniMessage 標籤。命令參數、metadata 名稱、玩家名稱、UUID 與清單等動態值固定以純文字 placeholder 插入，不能注入顏色、click 或 hover 事件。`term.*` 定義可重用的 locale 領域詞彙，template 以 `<term:完整鍵>` 引用；詞彙本身也固定按純文字插入。自訂 locale 的單一訊息或詞彙 key 缺失時會補入 bundled 預設值；訊息引用未知或格式錯誤的 term 時，只回退該訊息到 JAR 內建繁中 template。
+
+玩家可見的世界環境、管理狀態、identity 狀態、lifecycle capability、lifecycle operation/result 與明確 policy 使用 locale 詞彙。`--detached`、`list detached` 等指令 token，以及 permission、設定、持久化值、audit、diagnostics 和外部 placeholder 的機器值仍維持穩定英文，不受顯示語言影響。
 
 Domain rejection 使用 typed status 映射至固定 locale key；例如 not managed、service loading、operation in progress、identity mismatch、storage missing 與 fallback unavailable 都有獨立原因。非預期 backend exception 只回覆固定的內部錯誤與檢查紀錄提示，不會把 exception message、stack trace 或被拒絕的原始 option token回顯給 sender。
 
@@ -56,7 +58,7 @@ Domain rejection 使用 typed status 映射至固定 locale key；例如 not man
 
 ## World Identity 與顯示名稱
 
-- `/wm identity show <world>`：顯示已持久化的Paper key、UUID、environment、seed、structures、目前verification state、lifecycle capability及pending observation。
+- `/wm identity show <world>`：顯示已持久化的Paper key、UUID、environment、seed、structures、目前verification state、lifecycle capability及pending observation；玩家可見的environment、狀態、能力與布林值依locale詞彙顯示。
 - `/wm identity sync <world>`：只接受`SYNC_PENDING`。當durable identity相同但snapshot欄位有差異時，以目前觀察值更新metadata並恢復`VERIFIED`。
 - `/wm identity accept-replacement <world> confirm <clear-warps|keep-warps>`：只接受`CONFLICT`。明確採用replacement identity，並由管理員選擇清除或保留舊Warp；若replacement key/UUID與其他metadata衝突則拒絕。
 - `/wm identity abandon <world> confirm`：只接受尚未`VERIFIED`的ACTIVE world，將其改為`DETACHED`與`UNLOADED` intent，保留metadata與世界資料。

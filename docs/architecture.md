@@ -29,15 +29,15 @@ WorldManagement 提供可持久化的受管世界 metadata、完整世界 lifecy
 - `DiagnosticLogger` 在建立 event 或求值 supplier 前先檢查 `OFF/BASIC/VERBOSE` 與單一 area allowlist。event 只攜帶不可變字串、UUID、整數座標與數量，不能跨執行緒保留 Bukkit/Paper world、location、player 或 entity。
 - file producer 只做 bounded queue `offer`；滿載時捨棄 best-effort event並彙總 dropped count。單 writer thread負責 UTF-8 escape、append、rotation及 retention。writer在既有 I/O bounded drain之後最後關閉，Paper disable callback不等待。
 - `PROTECTION` 不逐事件 enqueue；listener只更新 lock-free counter，30 秒窗口到期後由後續事件觸發摘要。completion、snapshot/registry lookup、access-policy read、正常 scheduler dispatch與每次 I/O submit也禁止逐次診斷。
-- `YamlWorldMetadataRepository` 使用每世界一份 `plugins/WorldManagement/worlds/<world>.yml`，overwrite/delete 前建立 backup；schema migration 會先 preflight 全部檔案並建立完整 provider snapshot，future schema 不會造成部分 rewrite。單一毀損檔會隔離至 quarantine，避免阻斷其餘 aggregate。
-- `JdbcWorldMetadataRepository` 將完整 schema payload 寫入單一資料表，以 SQL `WHERE version = ?` 實作 optimistic locking；它初始化 schema version 與 audit table。SQLite、MySQL 與 MariaDB 共用此 adapter。schema upgrade 先建立備份、完成冪等 DDL，最後才更新 version marker；MySQL/MariaDB 使用 advisory lock 序列化 migration。
+- `YamlWorldMetadataRepository` 使用每世界一份 `plugins/WorldManagement/worlds/<world>.yml`，overwrite/delete 前建立 backup。載入時先檢查所有頂層檔案的 schema marker；schema 2 以上會在任何檔案移動前 fail closed。通過 preflight 後，單一毀損的 schema 1 檔案會隔離至 quarantine，避免阻斷其餘 aggregate。
+- `JdbcWorldMetadataRepository` 將完整 schema 1 payload 寫入單一資料表，以 SQL `WHERE version = ?` 實作 optimistic locking；它初始化並嚴格驗證 JDBC schema version 1、metadata table 與 audit table。SQLite、MySQL 與 MariaDB 共用此 adapter，不會自動修改非初版或部分存在的 schema。
 - SQL provider 的 `create`、`replace`、`delete` metadata mutation 可透過 storage 的 audited contract 與成功 audit event 使用同一 JDBC connection/transaction；任何 audit insert 失敗都會 rollback metadata，快取只在 commit 後更新。
 - 發行 JAR 以 Shadow 封裝並 relocate BoostedYAML 與 SnakeYAML，避免與其他 plugin 的 runtime classpath 衝突。
 - 寫入先建立同目錄暫存檔，再以原子移動取代目標；不支援原子移動的檔案系統退回一般 replace。
 - aggregate 使用 `version` 進行 optimistic version 檢查。快取只會在 repository 成功寫入後更新；關機時先拒絕新 I/O，再由I/O worker排空queue並執行terminal close，不阻塞Paper game thread。
 - `StorageMigrator` 透過 repository contract 驗證、複製及重新讀取驗證 aggregate；migration與一般metadata mutation共用`MetadataMutationGate`。成功後mutation保持frozen，直到管理員切換provider並重啟；失敗會盡力清除partial target並重新開放active provider mutation。`/wm storage migrate <source> <target> confirm`只支援明確設定的target，保留來源且不隱式切換active provider。
 
-完整架構計畫與尚待補強項目請參考 [實作狀態](implementation-status.md)。
+目前交付範圍與尚待補強項目請參考 [實作狀態](implementation-status.md)。
 
 ### Adopt
 
@@ -73,7 +73,7 @@ WorldManagement 提供可持久化的受管世界 metadata、完整世界 lifecy
 
 - 保護 listener 僅讀 `WorldRegistry` immutable snapshot，攔截 entry、break/place、interact 與 container open，不執行 I/O。
 - rank/access policy 支援 bypass、server owner 快速放行、白名單/黑名單及 rank permissions。
-- Warp 是 metadata aggregate 的 schema 2 欄位。私有 Warp 同時檢查 `USE_PRIVATE_WARP`、trust/owner/rank 與可選 external permission。
+- Warp 是 metadata schema 1 aggregate 的必要欄位。私有 Warp 同時檢查 `USE_PRIVATE_WARP`、trust/owner/rank 與可選 external permission。
 - 實際 Warp teleport 透過 player entity scheduler 與 `teleportAsync` 執行。
 - LuckPerms以optional dependency載入。hooks.yml啟用且API存在時，`DestinationWorldPermissionResolver`先要求`LoadedWorldCatalog`中有唯一、identity相符的目的world，再由`LuckPermsCachedPermissionLookup`複製玩家目前的contextual `QueryOptions`、只替換`world`context並查cached permission。API/user/context缺失或查詢異常時fail closed；不執行I/O、load或離線lookup。一般command permission與protection bypass仍由Paper/Bukkit處理，玩家名稱只由線上快照解析，WorldManagement rank永不映射為LuckPerms group。
 - Multiverse-Core 5同樣是optional dependency，但啟用lifecycle hook最低需要5.2.0；該版才提供保留Bukkit runtime的`RemoveWorldOptions`。連線時先探測此API，不相容版本標示API unavailable並讓remove/delete fail closed。API可用時，`WorldTrackingHook`在global scheduler呼叫`WorldManager.removeWorld(RemoveWorldOptions...unloadBukkitWorld(false))`，只解除MV追蹤而保留Bukkit runtime；之後再明確檢查`saveWorldsConfig()`，因MV remove流程本身不會將內部save failure暴露為remove failure。保存失敗會保留retryable pending persistence並阻止WorldManagement lifecycle mutation。runtime linkage failure會轉為FAILED並釋放per-world operation，不得讓scheduler callback拋出Error後留下永久gate。MV API同步觸發Bukkit event與YAML保存，因此不得移到I/O worker；這是第三方API在Paper thread上的已知同步I/O限制。

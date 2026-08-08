@@ -3,5 +3,6 @@ build/
 bin/
 out/
 *.iml
+*.log
 plan/
 e2e/*/node_modules/

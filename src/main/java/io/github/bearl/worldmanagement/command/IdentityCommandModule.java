@@ -13,8 +13,10 @@ import io.github.bearl.worldmanagement.world.WorldManagementState;
 import io.github.bearl.worldmanagement.world.WorldMetadata;
 import java.time.Instant;
 import java.util.Locale;
+import java.util.Map;
 import java.util.Objects;
 import java.util.Optional;
+import net.kyori.adventure.text.Component;
 import org.bukkit.command.CommandSender;
 import org.bukkit.entity.Player;
 
@@ -82,19 +84,18 @@ public final class IdentityCommandModule implements WorldManagementCommandModule
             return true;
         }
         final WorldIdentitySnapshot identity = metadata.identity();
-        send(
-            sender,
-            "command.identity.show",
-            "world", metadata.worldName(),
-            "key", identity.paperKey(),
-            "uuid", identity.worldUuid().toString(),
-            "environment", identity.environment().name(),
-            "seed", Long.toString(identity.seed()),
-            "structures", Boolean.toString(identity.generateStructures()),
-            "state", metadata.identityState().name(),
-            "capability", metadata.lifecycleCapability().name(),
-            "pending", metadata.pendingIdentity().map(IdentityCommandModule::identitySummary).orElse("none")
-        );
+        messageSender.send(sender, messages.component("command.identity.show", Map.of(
+            "world", Component.text(metadata.worldName()),
+            "key", Component.text(identity.paperKey()),
+            "uuid", Component.text(identity.worldUuid().toString()),
+            "environment", messages.termComponent(environmentTerm(identity.environment())),
+            "seed", Component.text(Long.toString(identity.seed())),
+            "structures", booleanTerm(identity.generateStructures()),
+            "state", messages.termComponent(identityStateTerm(metadata.identityState())),
+            "capability", messages.termComponent(capabilityTerm(metadata.lifecycleCapability())),
+            "pending", metadata.pendingIdentity().map(this::identitySummary)
+                .orElseGet(() -> messages.termComponent("common.none"))
+        )));
         return true;
     }
 
@@ -252,12 +253,13 @@ public final class IdentityCommandModule implements WorldManagementCommandModule
             return;
         }
         switch (result.status()) {
-            case REPLACEMENT_ACCEPTED -> respond(
-                target,
+            case REPLACEMENT_ACCEPTED -> messageSender.send(target, messages.component(
                 "command.identity.accept.success",
-                "world", worldName,
-                "policy", policy
-            );
+                Map.of(
+                    "world", Component.text(worldName),
+                    "policy", messages.termComponent(policyTerm(policy))
+                )
+            ));
             case INDEX_CONFLICT -> respond(target, "command.identity.accept.index-conflict", "world", worldName);
             case STALE -> respond(target, "command.identity.accept.stale", "world", worldName);
             case NOT_MANAGED -> respond(target, "command.identity.not-managed", "world", worldName);
@@ -304,12 +306,52 @@ public final class IdentityCommandModule implements WorldManagementCommandModule
         }
     }
 
-    private static String identitySummary(final WorldIdentitySnapshot identity) {
-        return "key=" + identity.paperKey()
-            + ", UUID=" + identity.worldUuid()
-            + ", environment=" + identity.environment()
-            + ", seed=" + identity.seed()
-            + ", structures=" + identity.generateStructures();
+    private Component identitySummary(final WorldIdentitySnapshot identity) {
+        return messages.component("command.identity.pending-summary", Map.of(
+            "key", Component.text(identity.paperKey()),
+            "uuid", Component.text(identity.worldUuid().toString()),
+            "environment", messages.termComponent(environmentTerm(identity.environment())),
+            "seed", Component.text(Long.toString(identity.seed())),
+            "structures", booleanTerm(identity.generateStructures())
+        ));
+    }
+
+    private Component booleanTerm(final boolean value) {
+        return messages.termComponent(value ? "common.yes" : "common.no");
+    }
+
+    private static String environmentTerm(final io.github.bearl.worldmanagement.world.WorldEnvironment environment) {
+        return switch (environment) {
+            case NORMAL -> "environment.normal";
+            case NETHER -> "environment.nether";
+            case THE_END -> "environment.the-end";
+            case CUSTOM -> "environment.custom";
+        };
+    }
+
+    private static String identityStateTerm(final IdentityVerificationState state) {
+        return switch (state) {
+            case VERIFIED -> "identity.verified";
+            case SYNC_PENDING -> "identity.sync-pending";
+            case CONFLICT -> "identity.conflict";
+        };
+    }
+
+    private static String capabilityTerm(
+        final io.github.bearl.worldmanagement.world.LifecycleCapability capability
+    ) {
+        return switch (capability) {
+            case MANAGED -> "capability.managed";
+            case EXTERNAL_ONLY -> "capability.external-only";
+        };
+    }
+
+    private static String policyTerm(final String policy) {
+        return switch (policy) {
+            case "keep-warps" -> "policy.keep-warps";
+            case "clear-warps" -> "policy.clear-warps";
+            default -> throw new IllegalArgumentException("Unknown identity replacement policy: " + policy);
+        };
     }
 
     private static AuditEvent event(

@@ -432,7 +432,7 @@ public final class WorldManagementE2ESupportPlugin extends JavaPlugin implements
                     final String worldName = StringArgumentType.getString(context, "world");
                     final NamespacedKey worldKey = NamespacedKey.minecraft(worldName);
                     scheduleWorldMutation(() -> {
-                        final World world = Bukkit.createWorld(WorldCreator.ofKey(worldKey));
+                        final World world = Bukkit.createWorld(fixtureWorldCreator(worldKey));
                         if (world == null) {
                             getLogger().warning("WM_E2E_WORLD_CREATE_FAILED world=" + worldKey);
                             return;
@@ -465,7 +465,7 @@ public final class WorldManagementE2ESupportPlugin extends JavaPlugin implements
                             return 0;
                         }
                         scheduleWorldMutation(() -> {
-                            final World world = Bukkit.createWorld(WorldCreator.ofKey(worldKey));
+                            final World world = Bukkit.createWorld(fixtureWorldCreator(worldKey));
                             if (world != null) {
                                 context.getSource().getSender().sendPlainMessage(
                                     "WM_E2E_WORLD_LOAD_COMPLETE world=" + worldKey
@@ -484,6 +484,13 @@ public final class WorldManagementE2ESupportPlugin extends JavaPlugin implements
                         });
                         return 1;
                     })));
+    }
+
+    private static WorldCreator fixtureWorldCreator(final NamespacedKey worldKey) {
+        return WorldCreator.ofKey(worldKey)
+            .seed(8_675_309L)
+            .generateStructures(false)
+            .forcedSpawnPosition(io.papermc.paper.math.Position.fine(0.0, 80.0, 0.0), 0.0f, 0.0f);
     }
 
     private void scheduleWorldMutation(final Runnable mutation, final Runnable exhausted) {

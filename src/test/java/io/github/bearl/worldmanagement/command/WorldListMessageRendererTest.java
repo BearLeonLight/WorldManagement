@@ -45,7 +45,7 @@ final class WorldListMessageRendererTest {
         final List<Component> rendered = new WorldListMessageRenderer(messages()).render(List.of(metadata), false);
 
         assertEquals("受管世界：", plain(rendered.get(0)));
-        assertEquals("創意世界 - NETHER", plain(rendered.get(1)));
+        assertEquals("創意世界 - 地獄", plain(rendered.get(1)));
         assertEquals("世界 ID：creative", plain(assertInstanceOf(
             Component.class, rendered.get(1).children().getFirst().hoverEvent().value()
         )));
@@ -57,31 +57,47 @@ final class WorldListMessageRendererTest {
 
         final Component entry = new WorldListMessageRenderer(messages()).render(List.of(metadata), false).get(1);
 
-        assertEquals("creative - NORMAL", plain(entry));
+        assertEquals("creative - 主世界", plain(entry));
         assertNull(entry.children().getFirst().hoverEvent());
     }
 
     @Test
-    void rendersLoadedRuntimeWorldsWithManagementStatus() {
-        final WorldRuntimeGateway.LifecycleWorld active = new WorldRuntimeGateway.LifecycleWorld(
-            new WorldIdentitySnapshot(
-                "minecraft:creative",
-                UUID.fromString("11111111-1111-1111-1111-111111111111"),
-                WorldEnvironment.NORMAL,
-                42L,
-                true
-            ),
-            LifecycleCapability.MANAGED
-        );
-
+    void rendersLoadedRuntimeWorldsWithLocalizedEnvironmentAndManagementStatus() {
         final List<Component> rendered = new WorldListMessageRenderer(messages()).renderLoaded(List.of(
             new WorldListMessageRenderer.LoadedWorldEntry(
-                active, WorldListMessageRenderer.LoadedStatus.ACTIVE
+                lifecycleWorld("alpha", WorldEnvironment.NORMAL, "11111111-1111-1111-1111-111111111111"),
+                WorldListMessageRenderer.LoadedStatus.ACTIVE
+            ),
+            new WorldListMessageRenderer.LoadedWorldEntry(
+                lifecycleWorld("beta", WorldEnvironment.NETHER, "22222222-2222-2222-2222-222222222222"),
+                WorldListMessageRenderer.LoadedStatus.DETACHED
+            ),
+            new WorldListMessageRenderer.LoadedWorldEntry(
+                lifecycleWorld("gamma", WorldEnvironment.THE_END, "33333333-3333-3333-3333-333333333333"),
+                WorldListMessageRenderer.LoadedStatus.UNKNOWN
+            ),
+            new WorldListMessageRenderer.LoadedWorldEntry(
+                lifecycleWorld("omega", WorldEnvironment.CUSTOM, "44444444-4444-4444-4444-444444444444"),
+                WorldListMessageRenderer.LoadedStatus.ACTIVE
             )
         ));
 
         assertEquals("目前已載入世界：", plain(rendered.get(0)));
-        assertEquals("creative - NORMAL - ACTIVE", plain(rendered.get(1)));
+        assertEquals("alpha - 主世界 - 受管", plain(rendered.get(1)));
+        assertEquals("beta - 地獄 - 已停止管理", plain(rendered.get(2)));
+        assertEquals("gamma - 終界 - 未知", plain(rendered.get(3)));
+        assertEquals("omega - 自訂 - 受管", plain(rendered.get(4)));
+    }
+
+    private static WorldRuntimeGateway.LifecycleWorld lifecycleWorld(
+        final String name,
+        final WorldEnvironment environment,
+        final String uuid
+    ) {
+        return new WorldRuntimeGateway.LifecycleWorld(
+            new WorldIdentitySnapshot("minecraft:" + name, UUID.fromString(uuid), environment, 42L, true),
+            LifecycleCapability.MANAGED
+        );
     }
 
     private MessageService messages() {
