@@ -6,7 +6,7 @@
 
 ## 已完成
 
-- Java 25 Gradle Kotlin DSL、Shadow JAR、`paper-plugin.yml`、可選 LuckPerms、Multiverse-Core 5、PlaceholderAPI與MiniPlaceholders compile-only dependencies，以及支援 TestServer 自動偵測、Paper Fill v3 下載、SHA-256 驗證與 Gradle cache 的 `paperJarSmokeTest`。
+- Java 25 Gradle Kotlin DSL、Shadow JAR、`paper-plugin.yml`、可選 LuckPerms、Multiverse-Core 5、PlaceholderAPI與MiniPlaceholders compile-only dependencies，以及支援 TestServer 自動偵測、Paper Fill v3 下載、SHA-256 驗證與 Gradle cache 的 `paperJarSmokeTest`。WorldManagement 僅支援 Minecraft `26.x`（`1.26.x`）；不符合版本會在啟動初始化前記錄提示並停用插件。
 - 核心 I/O/threading 邊界：bounded `PluginIoExecutor`、`WorldThreadDispatcher`、event-driven shutdown drain、由有硬上限的受管terminal I/O workers逐項隔離且聚合錯誤的resource close、可觀察的shutdown timeout、拒絕symlink/junction/reparse point的world name/real-path confinement、訊息與設定載入。
 - YAML、SQLite、MySQL/MariaDB 的單一 metadata provider；config、完整 metadata payload 與 JDBC schema 均以 1 為初版，future schema fail-closed，YAML支援atomic write/backup/quarantine，SQL使用Hikari JDBC與optimistic locking。generator、biome provider、deletion transaction與registration source provenance由共用schema 1 payload codec持久化。
 - 不可變 metadata aggregate 與 `WorldRegistry` 原子 snapshot 替換；成功 persistence/transaction commit 後才更新快取。

@@ -6,6 +6,7 @@ WorldManagement 提供可持久化的受管世界 metadata、完整世界 lifecy
 
 ### 執行緒模型
 
+- WorldManagement 僅支援 Minecraft `26.x`（`1.26.x`）。`onEnable()` 的第一個階段使用 Paper `Server#getMinecraftVersion()` 進行嚴格版本檢查；Paper 26.x 回傳的 `26.<patch>` 與完整 `1.26.<patch>` 表示法皆視為相容。不符合時只記錄目前版本與支援範圍，立即停用插件並返回，不建立 I/O executor、listener、storage 或其他服務。
 - `PluginIoExecutor` 是唯一執行 YAML 與其他阻塞 I/O 的 bounded單一背景worker；queue容量為1024，滿載或shutdown後的submission以exceptional future拒絕，不會阻塞或改在caller thread執行。一般 command、listener、scheduler callback 與 `onDisable()` 不等待 I/O。
 - disable先停止lifecycle與teleport admission、取消plugin-owned scheduler task，讓尚未提交Paper API的pending teleport以false完成。已提交的`teleportAsync`則讓指令結果可立即以false完成，但其獨立drain future必須等待底層Paper future真正完成；不能把wrapper result當成runtime operation已結束。各元件若在`beginShutdown()`同步失敗或回傳null，會轉成exceptional future，仍由shutdown coordinator繼續terminal close。其後主I/O worker排空已接受的mutation/補償，並以最後一個受追蹤task協調repository、audit、pending storage與診斷資源關閉。若既有I/O忽略interrupt，`PluginIoExecutor`會原子提升尚未開始的terminal coordinator至受管daemon thread；各close仍由其擁有、命名且有硬上限的terminal I/O worker依序執行，共用shutdown deadline。單一close失敗或忽略interrupt不會跳過後續資源，錯誤以suppressed聚合，逾時future明確失敗且只可能留下有限的受管daemon terminal threads。Paper thread不等待，亦不建立未受管drain thread。
 - `DiagnosticFileWriter` 是獨立的 best-effort bounded log writer；它不承載 metadata、audit 或其他業務 I/O，也不能回壓 Paper game thread。

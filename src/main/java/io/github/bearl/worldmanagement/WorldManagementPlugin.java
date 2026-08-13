@@ -122,6 +122,15 @@ public final class WorldManagementPlugin extends JavaPlugin {
 
     @Override
     public void onEnable() {
+        final String minecraftVersion = getServer().getMinecraftVersion();
+        if (!MinecraftVersionCompatibility.isSupported(minecraftVersion)) {
+            getLogger().severe(
+                "Unsupported Minecraft version %s. WorldManagement requires Minecraft 26.x (1.26.x); disabling plugin."
+                    .formatted(minecraftVersion == null ? "<unknown>" : minecraftVersion)
+            );
+            getServer().getPluginManager().disablePlugin(this);
+            return;
+        }
         this.startupDiagnostics = new StartupDiagnostics();
         this.consoleOutput = new ConsoleOutput(getLogger().getName());
         consoleOutput.info(startupDiagnostics.headingComponent("Enabling %s %s...".formatted(getName(), getPluginMeta().getVersion())));

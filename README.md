@@ -9,7 +9,7 @@ WorldManagement 是面向 Paper 伺服器的世界管理插件，目標是提供
 ## 系統需求
 
 - Java 25 LTS
-- 與 `paper-plugin.yml` 宣告版本相容的 Paper 伺服器
+- Minecraft `26.x`（`1.26.x`）的 Paper 伺服器；WorldManagement 會在載入階段檢查遊戲版本，其他版本會記錄不支援提示並停用插件，不會初始化 storage、listener、服務或處理命令
 - 可選的Multiverse-Core lifecycle整合需要5.2.0以上版本；5.0.x缺少保留Bukkit runtime的安全untracking API
 - Windows、Linux 或 macOS
 
