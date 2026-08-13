@@ -103,6 +103,25 @@ final class BrigadierWorldManagementCommandTest {
     }
 
     @Test
+    void importOptionCompletionSuggestsOnlyUnusedFlagsAndRejectsDuplicatesSafely() {
+        assertEquals(
+            List.of("--detached", "--regenerate-identity"),
+            suggestions("wm import archive NORMAL ").getList().stream()
+                .map(suggestion -> suggestion.getText()).sorted().toList()
+        );
+        assertEquals(
+            List.of("--regenerate-identity"),
+            suggestions("wm import archive NORMAL --detached ").getList().stream()
+                .map(suggestion -> suggestion.getText()).toList()
+        );
+        assertEquals(
+            List.of(),
+            suggestions("wm import archive NORMAL --detached --detached ").getList().stream()
+                .map(suggestion -> suggestion.getText()).toList()
+        );
+    }
+
+    @Test
     void createGeneratorValueUsesTheImmutableGeneratorSnapshot() {
         final SuggestionCatalog catalog = new SuggestionCatalog(new OnlinePlayerSnapshot());
         catalog.replaceGeneratorPlugins(List.of("Iris", "Terra"));
@@ -177,6 +196,10 @@ final class BrigadierWorldManagementCommandTest {
 
         assertFullyParsed(dispatcher, "wm import archive NETHER");
         assertExecutableParsed(dispatcher, "wm import archive NETHER --detached");
+        assertExecutableParsed(dispatcher, "wm import archive NETHER --regenerate-identity");
+        assertExecutableParsed(
+            dispatcher, "wm import archive NETHER --regenerate-identity --detached"
+        );
         assertExecutableParsed(dispatcher, "wm adopt archive --detached");
         assertFullyParsed(dispatcher, "wm import archive");
 

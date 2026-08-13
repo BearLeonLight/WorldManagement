@@ -6,6 +6,7 @@ import io.github.bearl.worldmanagement.world.LifecycleCapability;
 import io.github.bearl.worldmanagement.world.VerifiedWorldRef;
 import io.github.bearl.worldmanagement.world.WorldManagementState;
 import io.github.bearl.worldmanagement.world.WorldMetadata;
+import java.io.DataInputStream;
 import java.io.IOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
@@ -21,6 +22,8 @@ import java.util.Optional;
 import java.util.Set;
 import java.util.UUID;
 import java.util.stream.Stream;
+import net.kyori.adventure.nbt.BinaryTagIO;
+import net.kyori.adventure.nbt.CompoundBinaryTag;
 
 /** Resolves Paper 26.x dimension storage and legacy standalone world directories. */
 public final class PaperWorldStorageGateway implements WorldStorageGateway {
@@ -60,15 +63,24 @@ public final class PaperWorldStorageGateway implements WorldStorageGateway {
 
     @Override
     public Optional<ImportClaim> prepareImport(final String worldId) {
+        final ImportPreparation preparation = prepareImportPreparation(worldId);
+        if (preparation.status() == ImportPreparationStatus.STORAGE_CONFLICT) {
+            throw new StorageException("World has ambiguous storage paths: " + worldId);
+        }
+        return preparation.claim();
+    }
+
+    @Override
+    public ImportPreparation prepareImportPreparation(final String worldId) {
         final Path current = dimensionDirectory(worldId);
         final Path legacy = legacyDirectory(worldId);
         final boolean currentExists = Files.exists(current, LinkOption.NOFOLLOW_LINKS);
         final boolean legacyExists = Files.exists(legacy, LinkOption.NOFOLLOW_LINKS);
         if (!currentExists && !legacyExists) {
-            return Optional.empty();
+            return ImportPreparation.missing();
         }
         if (currentExists && legacyExists) {
-            throw new StorageException("World has ambiguous storage paths: " + worldId);
+            return ImportPreparation.storageConflict();
         }
         final Path locator = currentExists
             ? nameValidator.requireExistingDirectChild(current.getParent(), worldId)
@@ -76,7 +88,12 @@ public final class PaperWorldStorageGateway implements WorldStorageGateway {
         final StorageFingerprint fingerprint = currentExists
             ? paperStorageFingerprint(locator)
             : legacyStorageFingerprint(locator);
-        return Optional.of(new PaperImportClaim(gatewayId, worldId, locator, fingerprint));
+        final Optional<UUID> persistedWorldUuid = currentExists
+            ? Optional.of(readPaperWorldUuid(locator.resolve("data").resolve("paper").resolve("metadata.dat")))
+            : readLegacyWorldUuid(locator.resolve("uid.dat"));
+        return ImportPreparation.importable(new PaperImportClaim(
+            gatewayId, worldId, locator, fingerprint, persistedWorldUuid
+        ));
     }
 
     @Override
@@ -93,6 +110,58 @@ public final class PaperWorldStorageGateway implements WorldStorageGateway {
             : legacyStorageFingerprint(current);
         if (!claim.fingerprint().equals(observed)) {
             throw new StorageException("World storage changed after the import claim was created.");
+        }
+    }
+
+    @Override
+    public IdentityRegenerationClaim beginIdentityRegeneration(final ImportClaim importClaim) {
+        final PaperImportClaim claim = requireImportClaim(importClaim);
+        validateImportClaim(claim);
+        final UUID previousWorldUuid = claim.persistedWorldUuid().orElseThrow(() ->
+            new StorageException("World storage has no persisted identity to regenerate.")
+        );
+        final Path identityMarker = claim.fingerprint().paperLayout()
+            ? claim.locator().resolve("data").resolve("paper").resolve("metadata.dat")
+            : claim.locator().resolve("uid.dat");
+        final Path recoveryMarker = identityMarker.resolveSibling(
+            identityMarker.getFileName() + ".worldmanagement-recovery"
+        );
+        requireRegularIdentityMarker(identityMarker);
+        if (Files.exists(recoveryMarker, LinkOption.NOFOLLOW_LINKS)) {
+            throw new StorageException("World identity recovery marker already exists.");
+        }
+        try {
+            Files.move(identityMarker, recoveryMarker, StandardCopyOption.ATOMIC_MOVE);
+        } catch (final IOException exception) {
+            throw new StorageException("Could not begin world identity regeneration.", exception);
+        }
+        return new PaperIdentityRegenerationClaim(
+            gatewayId, previousWorldUuid, identityMarker, recoveryMarker
+        );
+    }
+
+    @Override
+    public void restoreIdentity(final IdentityRegenerationClaim regenerationClaim) {
+        final PaperIdentityRegenerationClaim claim = requireIdentityRegenerationClaim(regenerationClaim);
+        if (Files.exists(claim.identityMarker(), LinkOption.NOFOLLOW_LINKS)) {
+            throw new StorageException("Cannot restore world identity over an existing live marker.");
+        }
+        requireRegularIdentityMarker(claim.recoveryMarker());
+        try {
+            Files.move(claim.recoveryMarker(), claim.identityMarker(), StandardCopyOption.ATOMIC_MOVE);
+        } catch (final IOException exception) {
+            throw new StorageException("Could not restore world identity marker.", exception);
+        }
+    }
+
+    @Override
+    public void finalizeIdentityRegeneration(final IdentityRegenerationClaim regenerationClaim) {
+        final PaperIdentityRegenerationClaim claim = requireIdentityRegenerationClaim(regenerationClaim);
+        requireRegularIdentityMarker(claim.recoveryMarker());
+        try {
+            Files.delete(claim.recoveryMarker());
+        } catch (final IOException exception) {
+            throw new StorageException("Could not finalize world identity regeneration.", exception);
         }
     }
 
@@ -378,6 +447,29 @@ public final class PaperWorldStorageGateway implements WorldStorageGateway {
         return claim;
     }
 
+    private PaperIdentityRegenerationClaim requireIdentityRegenerationClaim(
+        final IdentityRegenerationClaim regenerationClaim
+    ) {
+        if (!(regenerationClaim instanceof PaperIdentityRegenerationClaim claim)
+            || !gatewayId.equals(claim.gatewayId())) {
+            throw new IllegalArgumentException("Identity regeneration claim does not belong to this storage gateway.");
+        }
+        return claim;
+    }
+
+    private static void requireRegularIdentityMarker(final Path path) {
+        try {
+            final BasicFileAttributes attributes = Files.readAttributes(
+                path, BasicFileAttributes.class, LinkOption.NOFOLLOW_LINKS
+            );
+            if (!attributes.isRegularFile() || attributes.isSymbolicLink() || attributes.isOther()) {
+                throw new StorageException("World identity marker must be a regular file.");
+            }
+        } catch (final IOException exception) {
+            throw new StorageException("Could not validate world identity marker.", exception);
+        }
+    }
+
     private StorageFingerprint paperStorageFingerprint(final Path locator) {
         return storageFingerprint(locator, true, List.of(
             locator.resolve("data").resolve("minecraft").resolve("world_gen_settings.dat"),
@@ -387,7 +479,54 @@ public final class PaperWorldStorageGateway implements WorldStorageGateway {
     }
 
     private StorageFingerprint legacyStorageFingerprint(final Path locator) {
-        return storageFingerprint(locator, false, List.of(locator.resolve("level.dat")));
+        final java.util.ArrayList<Path> markers = new java.util.ArrayList<>();
+        markers.add(locator.resolve("level.dat"));
+        final Path legacyUuid = locator.resolve("uid.dat");
+        if (Files.exists(legacyUuid, LinkOption.NOFOLLOW_LINKS)) {
+            markers.add(legacyUuid);
+        }
+        return storageFingerprint(locator, false, List.copyOf(markers));
+    }
+
+    private static Optional<UUID> readLegacyWorldUuid(final Path path) {
+        if (Files.notExists(path, LinkOption.NOFOLLOW_LINKS)) {
+            return Optional.empty();
+        }
+        try {
+            final BasicFileAttributes attributes = Files.readAttributes(
+                path, BasicFileAttributes.class, LinkOption.NOFOLLOW_LINKS
+            );
+            if (!attributes.isRegularFile() || attributes.isSymbolicLink() || attributes.isOther()
+                || attributes.size() != 16L) {
+                throw new StorageException("Legacy world UUID marker must be a regular 16-byte file.");
+            }
+            try (DataInputStream input = new DataInputStream(Files.newInputStream(path))) {
+                return Optional.of(new UUID(input.readLong(), input.readLong()));
+            }
+        } catch (final IOException exception) {
+            throw new StorageException("Could not read legacy world UUID marker.", exception);
+        }
+    }
+
+    private static UUID readPaperWorldUuid(final Path path) {
+        try {
+            final CompoundBinaryTag root = BinaryTagIO.reader(1024L * 1024L)
+                .read(path, BinaryTagIO.Compression.GZIP);
+            final int[] encodedUuid = root.getCompound("data").getIntArray("uuid", null);
+            if (encodedUuid == null || encodedUuid.length != 4) {
+                throw new StorageException("Paper world metadata does not contain a valid UUID.");
+            }
+            final long mostSignificantBits = (long) encodedUuid[0] << 32
+                | encodedUuid[1] & 0xffffffffL;
+            final long leastSignificantBits = (long) encodedUuid[2] << 32
+                | encodedUuid[3] & 0xffffffffL;
+            return new UUID(mostSignificantBits, leastSignificantBits);
+        } catch (final IOException | RuntimeException exception) {
+            if (exception instanceof StorageException storageException) {
+                throw storageException;
+            }
+            throw new StorageException("Could not read Paper world metadata UUID.", exception);
+        }
     }
 
     private static StorageRootIdentity rootIdentity(final Path locator) {
@@ -689,8 +828,21 @@ public final class PaperWorldStorageGateway implements WorldStorageGateway {
         UUID gatewayId,
         String worldId,
         Path locator,
-        StorageFingerprint fingerprint
+        StorageFingerprint fingerprint,
+        Optional<UUID> persistedWorldUuid
     ) implements ImportClaim {
+    }
+
+    private record PaperIdentityRegenerationClaim(
+        UUID gatewayId,
+        UUID previousWorldUuid,
+        Path identityMarker,
+        Path recoveryMarker
+    ) implements IdentityRegenerationClaim {
+        @Override
+        public Path recoveryPath() {
+            return recoveryMarker;
+        }
     }
 
     private record PaperLoadClaim(

@@ -54,6 +54,27 @@ final class LoadedWorldCatalogTest {
     }
 
     @Test
+    void resolvesOnlyAUniqueWorldUuidOwner() {
+        final LoadedWorldCatalog catalog = new LoadedWorldCatalog();
+        final UUID sharedUuid = UUID.fromString("11111111-1111-1111-1111-111111111111");
+        final WorldRuntimeGateway.LifecycleWorld creative = world(
+            "minecraft:creative", sharedUuid.toString()
+        );
+        final WorldRuntimeGateway.LifecycleWorld archive = world(
+            "minecraft:archive", sharedUuid.toString()
+        );
+
+        catalog.replaceAll(List.of(creative));
+        assertEquals(creative, catalog.findUniqueByWorldUuid(sharedUuid).orElseThrow());
+
+        catalog.loaded(archive);
+        assertTrue(catalog.findUniqueByWorldUuid(sharedUuid).isEmpty());
+
+        catalog.unloaded(archive.reference());
+        assertEquals(creative, catalog.findUniqueByWorldUuid(sharedUuid).orElseThrow());
+    }
+
+    @Test
     void exactUnloadInvalidatesThePriorGenerationWithoutRemovingAReplacement() {
         final LoadedWorldCatalog catalog = new LoadedWorldCatalog();
         final WorldRuntimeGateway.LifecycleWorld original = world(

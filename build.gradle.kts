@@ -200,6 +200,7 @@ dependencies {
     testImplementation("io.github.miniplaceholders:miniplaceholders-api:${providers.gradleProperty("miniPlaceholdersVersion").get()}")
     compileOnly("net.kyori:adventure-text-serializer-ansi:5.2.0")
     compileOnly("net.kyori:ansi:1.1.1")
+    implementation("net.kyori:adventure-nbt:5.2.0")
     testRuntimeOnly("net.kyori:adventure-text-serializer-ansi:5.2.0")
     testRuntimeOnly("net.kyori:ansi:1.1.1")
 

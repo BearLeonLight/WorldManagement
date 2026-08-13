@@ -7,6 +7,7 @@ import io.github.bearl.worldmanagement.world.WorldIdentitySnapshot;
 import java.util.Objects;
 import java.util.concurrent.CompletableFuture;
 import java.util.Optional;
+import java.util.UUID;
 
 /** Paper-affine world operations. Implementations must run on the global world scheduler. */
 public interface WorldRuntimeGateway {
@@ -73,6 +74,11 @@ public interface WorldRuntimeGateway {
     Optional<LifecycleWorld> findWorld(VerifiedWorldRef expected);
 
     Optional<LifecycleWorld> findLoadedWorldById(String worldId);
+
+    default Optional<LifecycleWorld> findLoadedWorldByUuid(final UUID worldUuid) {
+        Objects.requireNonNull(worldUuid, "worldUuid");
+        return Optional.empty();
+    }
 
     Optional<LifecycleWorld> findWorldByPaperKey(String paperKey);
 

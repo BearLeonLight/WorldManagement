@@ -105,7 +105,7 @@ final class WorldManagementCommandSpecTest {
         ), adopt.usageLines("wm"));
         assertEquals(List.of(
             "/wm import <world> <environment>",
-            "/wm import <world> <environment> --detached"
+            "/wm import <world> <environment> [--detached] [--regenerate-identity]"
         ), importWorld.usageLines("wm"));
         assertEquals(List.of(
             "/wm load <world>",

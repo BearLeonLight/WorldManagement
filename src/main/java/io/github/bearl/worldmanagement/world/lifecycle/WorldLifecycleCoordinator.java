@@ -624,18 +624,43 @@ public final class WorldLifecycleCoordinator {
         final boolean detached,
         final AuditEvent event
     ) {
+        return importWorld(worldName, environment, detached, false, event);
+    }
+
+    public CompletableFuture<CreateResult> importWorld(
+        final String worldName,
+        final WorldRuntimeGateway.WorldEnvironment environment,
+        final boolean detached,
+        final boolean regenerateIdentity,
+        final AuditEvent event
+    ) {
         Objects.requireNonNull(environment, "environment");
         return withOperation(worldName, WorldOperationState.IMPORTING, CreateResult.operationInProgress(), () -> {
             if (metadataService.metadataWorld(worldName).isPresent()) {
                 return CompletableFuture.completedFuture(CreateResult.alreadyExists());
             }
-            return ioExecutor.submit(() -> storageGateway.prepareImport(worldName)).thenCompose(importClaim -> {
-                if (importClaim.isEmpty()) {
+            return ioExecutor.submit(() -> storageGateway.prepareImportPreparation(worldName)).thenCompose(preparation -> {
+                if (preparation.status() == WorldStorageGateway.ImportPreparationStatus.MISSING) {
                     return CompletableFuture.completedFuture(CreateResult.failed());
                 }
-                final WorldStorageGateway.ImportClaim claim = importClaim.orElseThrow();
+                if (preparation.status() == WorldStorageGateway.ImportPreparationStatus.STORAGE_CONFLICT) {
+                    return CompletableFuture.completedFuture(CreateResult.storageConflict());
+                }
+                final WorldStorageGateway.ImportClaim claim = preparation.claim().orElseThrow();
                 return ioExecutor.execute(() -> storageGateway.validateImportClaim(claim))
-                    .thenCompose(unused -> continueOnNonTickingGlobal(() -> {
+                    .thenCompose(unused -> regenerateIdentity
+                        ? ioExecutor.submit(() -> Optional.of(storageGateway.beginIdentityRegeneration(claim)))
+                        : CompletableFuture.completedFuture(
+                            Optional.<WorldStorageGateway.IdentityRegenerationClaim>empty()
+                        ))
+                    .thenCompose(regeneration -> continueOnNonTickingGlobal(() -> {
+                        final WorldRuntimeGateway.LifecycleWorld uuidOwner = claim.persistedWorldUuid()
+                            .flatMap(gateway::findLoadedWorldByUuid)
+                            .filter(owner -> !owner.name().equals(worldName))
+                            .orElse(null);
+                        if (uuidOwner != null && regeneration.isEmpty()) {
+                            return CompletableFuture.completedFuture(CreateResult.duplicateIdentity());
+                        }
                         if (gateway.findWorldByPaperKey("minecraft:" + worldName).isPresent()
                             || metadataService.metadataWorld(worldName).isPresent()) {
                             return CompletableFuture.completedFuture(CreateResult.alreadyExists());
@@ -647,9 +672,21 @@ public final class WorldLifecycleCoordinator {
                             return CompletableFuture.failedFuture(failure);
                         }
                         if (loadResult.world().isEmpty()) {
-                            return CompletableFuture.completedFuture(CreateResult.failed());
+                            return regeneration.isPresent()
+                                ? ioExecutor.execute(() -> storageGateway.restoreIdentity(regeneration.orElseThrow()))
+                                    .thenApply(unused -> CreateResult.failed())
+                                : CompletableFuture.completedFuture(CreateResult.failed());
                         }
                         final WorldRuntimeGateway.LifecycleWorld world = loadResult.world().orElseThrow();
+                        if (regeneration.isPresent()
+                            && (world.identity().worldUuid().equals(
+                                regeneration.orElseThrow().previousWorldUuid()
+                            ) || gateway.findLoadedWorldByUuid(world.identity().worldUuid())
+                                .filter(owner -> !owner.name().equals(worldName)).isPresent())) {
+                            return unloadUnpersistedImport(
+                                world, CreateResult.identityRegenerationIncomplete()
+                            );
+                        }
                         return metadataService.adopt(
                             world.identity(), world.lifecycleCapability(), Optional.empty(),
                             Optional.empty(), defaultRankSystemEnabled,
@@ -657,14 +694,25 @@ public final class WorldLifecycleCoordinator {
                         )
                             .thenCompose(adoption -> switch (adoption.status()) {
                                 case ADOPTED -> revalidatePersistedRuntimeIdentity(world)
-                                    .thenApply(verified -> verified ? CreateResult.created() : CreateResult.failed());
+                                    .thenCompose(verified -> {
+                                        if (!verified) {
+                                            return CompletableFuture.completedFuture(CreateResult.failed());
+                                        }
+                                        return regeneration.isPresent()
+                                            ? ioExecutor.execute(() -> storageGateway.finalizeIdentityRegeneration(
+                                                regeneration.orElseThrow()
+                                            )).thenApply(unused -> CreateResult.created())
+                                            : CompletableFuture.completedFuture(CreateResult.created());
+                                    });
                                 case ALREADY_MANAGED -> CompletableFuture.completedFuture(CreateResult.alreadyExists());
                                 case IDENTITY_CONFLICT -> unloadUnpersistedImport(
                                     world, CreateResult.failed()
                                 );
                                 case NOT_READY -> unloadUnpersistedImport(world, CreateResult.notReady());
                             })
-                            .exceptionallyCompose(failure -> unloadAfterMetadataFailure(world, failure));
+                            .exceptionallyCompose(failure -> regeneration.isPresent()
+                                ? unloadAfterIdentityRegenerationFailure(world, failure)
+                                : unloadAfterMetadataFailure(world, failure));
                     }));
             });
         });
@@ -714,6 +762,28 @@ public final class WorldLifecycleCoordinator {
                 ));
             }
             return CompletableFuture.failedFuture(failure);
+        });
+    }
+
+    private CompletableFuture<CreateResult> unloadAfterIdentityRegenerationFailure(
+        final WorldRuntimeGateway.LifecycleWorld world,
+        final Throwable failure
+    ) {
+        return continueOnNonTickingGlobal(() -> {
+            if (!gateway.unload(world, false)) {
+                failure.addSuppressed(new IllegalStateException(
+                    "Could not unload world after identity regeneration failed: " + world.name()
+                ));
+            }
+            if (diagnostics != null) {
+                diagnostics.failure(
+                    DebugArea.LIFECYCLE,
+                    "identity_regeneration_incomplete",
+                    () -> java.util.Map.of("world", world.name()),
+                    failure
+                );
+            }
+            return CompletableFuture.completedFuture(CreateResult.identityRegenerationIncomplete());
         });
     }
 
@@ -1371,6 +1441,9 @@ public final class WorldLifecycleCoordinator {
         CREATED,
         ALREADY_EXISTS,
         FAILED,
+        STORAGE_CONFLICT,
+        DUPLICATE_IDENTITY,
+        IDENTITY_REGENERATION_INCOMPLETE,
         NOT_READY,
         OPERATION_IN_PROGRESS
     }
@@ -1399,6 +1472,11 @@ public final class WorldLifecycleCoordinator {
         private static CreateResult created() { return new CreateResult(CreateStatus.CREATED); }
         private static CreateResult alreadyExists() { return new CreateResult(CreateStatus.ALREADY_EXISTS); }
         private static CreateResult failed() { return new CreateResult(CreateStatus.FAILED); }
+        private static CreateResult storageConflict() { return new CreateResult(CreateStatus.STORAGE_CONFLICT); }
+        private static CreateResult duplicateIdentity() { return new CreateResult(CreateStatus.DUPLICATE_IDENTITY); }
+        private static CreateResult identityRegenerationIncomplete() {
+            return new CreateResult(CreateStatus.IDENTITY_REGENERATION_INCOMPLETE);
+        }
         private static CreateResult notReady() { return new CreateResult(CreateStatus.NOT_READY); }
         private static CreateResult operationInProgress() { return new CreateResult(CreateStatus.OPERATION_IN_PROGRESS); }
     }

@@ -7,6 +7,10 @@ test('accepts canonical commands with terminal typed options', () => {
     '/wm create creative NORMAL FLAT --seed 42 --generator Terra:normal',
     'wm create <world> <environment> <world-type> <options>'
   ))
+  assert.doesNotThrow(() => assertCommandMatchesPath(
+    '/wm import archive NORMAL --regenerate-identity --detached',
+    'wm import <world> <environment> <options>'
+  ))
 })
 
 test('normalizes root aliases', () => {

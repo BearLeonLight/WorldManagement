@@ -122,6 +122,17 @@ public final class BrigadierWorldManagementCommand {
             );
             return com.mojang.brigadier.Command.SINGLE_SUCCESS;
         }
+        if (route.prefix().equals(List.of("import")) && route.suffix().isEmpty()) {
+            commandHandler.executeImport(
+                sender,
+                (String) parsedArguments.get(0),
+                (String) parsedArguments.get(1),
+                parsedArguments.size() == 3
+                    ? (ImportCommandOptions) parsedArguments.get(2)
+                    : ImportCommandOptions.defaults()
+            );
+            return com.mojang.brigadier.Command.SINGLE_SUCCESS;
+        }
         commandHandler.execute(sender, route.arguments(parsedArguments.stream().map(String.class::cast).toList()));
         return com.mojang.brigadier.Command.SINGLE_SUCCESS;
     }

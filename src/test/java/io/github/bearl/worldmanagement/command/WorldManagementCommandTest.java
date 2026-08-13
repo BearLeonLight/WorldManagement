@@ -353,7 +353,26 @@ final class WorldManagementCommandTest {
         java.nio.file.Files.createDirectories(data.resolve("minecraft"));
         java.nio.file.Files.createDirectories(data.resolve("paper"));
         java.nio.file.Files.writeString(data.resolve("minecraft").resolve("world_gen_settings.dat"), "worldgen");
-        java.nio.file.Files.writeString(data.resolve("paper").resolve("metadata.dat"), "metadata");
+        final UUID worldUuid = UUID.nameUUIDFromBytes(
+            ("command-fixture:" + worldId).getBytes(java.nio.charset.StandardCharsets.UTF_8)
+        );
+        final int[] encodedUuid = {
+            (int) (worldUuid.getMostSignificantBits() >> 32),
+            (int) worldUuid.getMostSignificantBits(),
+            (int) (worldUuid.getLeastSignificantBits() >> 32),
+            (int) worldUuid.getLeastSignificantBits()
+        };
+        final net.kyori.adventure.nbt.CompoundBinaryTag metadata =
+            net.kyori.adventure.nbt.CompoundBinaryTag.builder()
+                .put("data", net.kyori.adventure.nbt.CompoundBinaryTag.builder()
+                    .putIntArray("uuid", encodedUuid)
+                    .build())
+                .build();
+        net.kyori.adventure.nbt.BinaryTagIO.writer().write(
+            metadata,
+            data.resolve("paper").resolve("metadata.dat"),
+            net.kyori.adventure.nbt.BinaryTagIO.Compression.GZIP
+        );
         java.nio.file.Files.writeString(data.resolve("paper").resolve("level_overrides.dat"), "overrides");
     }
 

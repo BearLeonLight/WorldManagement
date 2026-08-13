@@ -259,6 +259,11 @@ public final class PaperWorldRuntimeGateway implements WorldRuntimeGateway {
     }
 
     @Override
+    public Optional<LifecycleWorld> findLoadedWorldByUuid(final java.util.UUID worldUuid) {
+        return loadedWorldCatalog.findUniqueByWorldUuid(Objects.requireNonNull(worldUuid, "worldUuid"));
+    }
+
+    @Override
     public Optional<LifecycleWorld> findWorldByPaperKey(final String paperKey) {
         final NamespacedKey key = NamespacedKey.fromString(Objects.requireNonNull(paperKey, "paperKey"));
         return key == null

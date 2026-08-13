@@ -11,11 +11,14 @@ import io.github.bearl.worldmanagement.world.LifecycleCapability;
 import io.github.bearl.worldmanagement.world.WorldEnvironment;
 import io.github.bearl.worldmanagement.world.WorldIdentitySnapshot;
 import io.github.bearl.worldmanagement.world.WorldMetadata;
+import java.io.DataOutputStream;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.Optional;
 import java.util.Set;
 import java.util.UUID;
+import net.kyori.adventure.nbt.BinaryTagIO;
+import net.kyori.adventure.nbt.CompoundBinaryTag;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.Assumptions;
 import org.junit.jupiter.api.io.TempDir;
@@ -76,6 +79,98 @@ final class PaperWorldStorageGatewayTest {
         );
         assertEquals("replacement", Files.readString(legacy.resolve("level.dat")));
         assertEquals("original", Files.readString(moved.resolve("level.dat")));
+    }
+
+    @Test
+    void capturesLegacyWorldUuidAndRejectsItsReplacement() throws Exception {
+        final UUID originalUuid = UUID.fromString("11111111-1111-1111-1111-111111111111");
+        final Path legacy = Files.createDirectories(temporaryDirectory.resolve("archive"));
+        Files.writeString(legacy.resolve("level.dat"), "world");
+        writeLegacyUuid(legacy.resolve("uid.dat"), originalUuid);
+        final PaperWorldStorageGateway gateway = gateway();
+
+        final WorldStorageGateway.ImportClaim claim = gateway.prepareImportPreparation("archive")
+            .claim().orElseThrow();
+
+        assertEquals(Optional.of(originalUuid), claim.persistedWorldUuid());
+        writeLegacyUuid(
+            legacy.resolve("uid.dat"),
+            UUID.fromString("22222222-2222-2222-2222-222222222222")
+        );
+        assertThrows(
+            io.github.bearl.worldmanagement.storage.StorageException.class,
+            () -> gateway.validateImportClaim(claim)
+        );
+    }
+
+    @Test
+    void capturesPaperWorldUuidFromMetadataSavedData() throws Exception {
+        final UUID worldUuid = UUID.fromString("11111111-2222-3333-4444-555555555555");
+        final Path dimension = createPaperStorage(
+            temporaryDirectory.resolve("dimensions").resolve("minecraft").resolve("archive")
+        );
+        writePaperMetadata(dimension.resolve("data").resolve("paper").resolve("metadata.dat"), worldUuid);
+
+        final WorldStorageGateway.ImportClaim claim = gateway().prepareImportPreparation("archive")
+            .claim().orElseThrow();
+
+        assertEquals(Optional.of(worldUuid), claim.persistedWorldUuid());
+    }
+
+    @Test
+    void restoresLegacyIdentityRegenerationBeforeRuntimeSideEffects() throws Exception {
+        final UUID worldUuid = UUID.fromString("11111111-1111-1111-1111-111111111111");
+        final Path legacy = Files.createDirectories(temporaryDirectory.resolve("archive"));
+        Files.writeString(legacy.resolve("level.dat"), "world");
+        writeLegacyUuid(legacy.resolve("uid.dat"), worldUuid);
+        final PaperWorldStorageGateway gateway = gateway();
+        final WorldStorageGateway.ImportClaim importClaim = gateway.prepareImportPreparation("archive")
+            .claim().orElseThrow();
+
+        final WorldStorageGateway.IdentityRegenerationClaim regeneration =
+            gateway.beginIdentityRegeneration(importClaim);
+        assertFalse(Files.exists(legacy.resolve("uid.dat")));
+
+        gateway.restoreIdentity(regeneration);
+
+        assertTrue(Files.isRegularFile(legacy.resolve("uid.dat")));
+        assertEquals(worldUuid, gateway.prepareImportPreparation("archive")
+            .claim().orElseThrow().persistedWorldUuid().orElseThrow());
+    }
+
+    @Test
+    void finalizesIdentityRegenerationWithoutRestoringOldUuid() throws Exception {
+        final Path legacy = Files.createDirectories(temporaryDirectory.resolve("archive"));
+        Files.writeString(legacy.resolve("level.dat"), "world");
+        writeLegacyUuid(
+            legacy.resolve("uid.dat"),
+            UUID.fromString("11111111-1111-1111-1111-111111111111")
+        );
+        final PaperWorldStorageGateway gateway = gateway();
+        final WorldStorageGateway.IdentityRegenerationClaim regeneration = gateway.beginIdentityRegeneration(
+            gateway.prepareImportPreparation("archive").claim().orElseThrow()
+        );
+
+        gateway.finalizeIdentityRegeneration(regeneration);
+
+        assertFalse(Files.exists(legacy.resolve("uid.dat")));
+        assertFalse(Files.exists(regeneration.recoveryPath()));
+    }
+
+    @Test
+    void reportsImportStorageConflictWithoutChangingEitherPath() throws Exception {
+        final Path current = createPaperStorage(
+            temporaryDirectory.resolve("dimensions").resolve("minecraft").resolve("archive")
+        );
+        final Path legacy = Files.createDirectories(temporaryDirectory.resolve("archive"));
+        Files.writeString(legacy.resolve("level.dat"), "legacy");
+
+        final WorldStorageGateway.ImportPreparation preparation = gateway().prepareImportPreparation("archive");
+
+        assertEquals(WorldStorageGateway.ImportPreparationStatus.STORAGE_CONFLICT, preparation.status());
+        assertTrue(preparation.claim().isEmpty());
+        assertTrue(Files.isDirectory(current));
+        assertEquals("legacy", Files.readString(legacy.resolve("level.dat")));
     }
 
     @Test
@@ -354,6 +449,26 @@ final class PaperWorldStorageGatewayTest {
             validator,
             new WorldDirectoryRemover(validator)
         );
+    }
+
+    private static void writeLegacyUuid(final Path path, final UUID worldUuid) throws Exception {
+        try (DataOutputStream output = new DataOutputStream(Files.newOutputStream(path))) {
+            output.writeLong(worldUuid.getMostSignificantBits());
+            output.writeLong(worldUuid.getLeastSignificantBits());
+        }
+    }
+
+    private static void writePaperMetadata(final Path path, final UUID worldUuid) throws Exception {
+        final int[] encodedUuid = {
+            (int) (worldUuid.getMostSignificantBits() >> 32),
+            (int) worldUuid.getMostSignificantBits(),
+            (int) (worldUuid.getLeastSignificantBits() >> 32),
+            (int) worldUuid.getLeastSignificantBits()
+        };
+        final CompoundBinaryTag root = CompoundBinaryTag.builder()
+            .put("data", CompoundBinaryTag.builder().putIntArray("uuid", encodedUuid).build())
+            .build();
+        BinaryTagIO.writer().write(root, path, BinaryTagIO.Compression.GZIP);
     }
 
     private static WorldMetadata metadata() {

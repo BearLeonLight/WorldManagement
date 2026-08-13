@@ -1150,6 +1150,253 @@ final class WorldLifecycleCoordinatorTest {
     }
 
     @Test
+    void reportsImportStorageConflictBeforeRuntimeAccess() throws Exception {
+        final PluginIoExecutor executor = new PluginIoExecutor("LifecycleTest");
+        try {
+            createPaperStorage(temporaryDirectory, "archive");
+            final Path legacy = Files.createDirectories(temporaryDirectory.resolve("archive"));
+            Files.writeString(legacy.resolve("level.dat"), "legacy");
+            final WorldManagementService metadata = new WorldManagementService(
+                executor, new InMemoryWorldMetadataRepository(), new WorldRegistry()
+            );
+            metadata.load().join();
+            final FakeGateway gateway = new FakeGateway();
+            final WorldLifecycleCoordinator service = service(
+                gateway, metadata, executor, Optional.empty(), temporaryDirectory
+            );
+
+            final WorldLifecycleCoordinator.CreateResult result = service.importWorld(
+                "archive", WorldRuntimeGateway.WorldEnvironment.NORMAL
+            ).join();
+
+            assertEquals(WorldLifecycleCoordinator.CreateStatus.STORAGE_CONFLICT, result.status());
+            assertEquals(0, gateway.runtimeAccesses);
+            assertTrue(metadata.metadataWorld("archive").isEmpty());
+            assertEquals("legacy", Files.readString(legacy.resolve("level.dat")));
+            assertTrue(Files.isDirectory(
+                temporaryDirectory.resolve("dimensions").resolve("minecraft").resolve("archive")
+            ));
+        } finally {
+            executor.shutdown(Duration.ofSeconds(1));
+        }
+    }
+
+    @Test
+    void rejectsDuplicateLegacyWorldUuidBeforePaperLoad() throws Exception {
+        final PluginIoExecutor executor = new PluginIoExecutor("LifecycleTest");
+        try {
+            final UUID duplicateUuid = UUID.fromString("11111111-1111-1111-1111-111111111111");
+            final Path legacy = Files.createDirectories(temporaryDirectory.resolve("archive"));
+            Files.writeString(legacy.resolve("level.dat"), "world");
+            try (final java.io.DataOutputStream output = new java.io.DataOutputStream(
+                Files.newOutputStream(legacy.resolve("uid.dat"))
+            )) {
+                output.writeLong(duplicateUuid.getMostSignificantBits());
+                output.writeLong(duplicateUuid.getLeastSignificantBits());
+            }
+            final WorldManagementService metadata = new WorldManagementService(
+                executor, new InMemoryWorldMetadataRepository(), new WorldRegistry()
+            );
+            metadata.load().join();
+            final FakeGateway gateway = new FakeGateway();
+            gateway.uuidOwners.put(duplicateUuid, new WorldRuntimeGateway.LifecycleWorld(
+                identity("existing", duplicateUuid),
+                io.github.bearl.worldmanagement.world.LifecycleCapability.MANAGED
+            ));
+            final WorldLifecycleCoordinator service = service(
+                gateway, metadata, executor, Optional.empty(), temporaryDirectory
+            );
+
+            final WorldLifecycleCoordinator.CreateResult result = service.importWorld(
+                "archive", WorldRuntimeGateway.WorldEnvironment.NORMAL
+            ).join();
+
+            assertEquals(WorldLifecycleCoordinator.CreateStatus.DUPLICATE_IDENTITY, result.status());
+            assertEquals(0, gateway.unmanagedLoadCalls);
+            assertTrue(metadata.metadataWorld("archive").isEmpty());
+            assertTrue(Files.isRegularFile(legacy.resolve("uid.dat")));
+        } finally {
+            executor.shutdown(Duration.ofSeconds(1));
+        }
+    }
+
+    @Test
+    void rejectsConcurrentImportForTheSameWorldUntilTheFirstCompletes() throws Exception {
+        final PluginIoExecutor executor = new PluginIoExecutor("LifecycleTest");
+        try {
+            createPaperStorage(temporaryDirectory, "archive");
+            final WorldManagementService metadata = new WorldManagementService(
+                executor, new InMemoryWorldMetadataRepository(), new WorldRegistry()
+            );
+            metadata.load().join();
+            final FakeGateway gateway = new FakeGateway();
+            gateway.worldMutationsAllowed = false;
+            final ManualGlobalDispatcher dispatcher = new ManualGlobalDispatcher();
+            final WorldLifecycleCoordinator service = new WorldLifecycleCoordinator(
+                gateway, metadata, true, executor, storage(temporaryDirectory), Duration.ZERO,
+                dispatcher, Optional.empty()
+            );
+
+            final CompletableFuture<WorldLifecycleCoordinator.CreateResult> first = service.importWorld(
+                "archive", WorldRuntimeGateway.WorldEnvironment.NORMAL
+            );
+            dispatcher.runNextGlobal();
+
+            assertEquals(
+                WorldLifecycleCoordinator.CreateStatus.OPERATION_IN_PROGRESS,
+                service.importWorld("archive", WorldRuntimeGateway.WorldEnvironment.NORMAL).join().status()
+            );
+            assertEquals(0, gateway.unmanagedLoadCalls);
+
+            gateway.worldMutationsAllowed = true;
+            dispatcher.runNextGlobal();
+            dispatcher.runNextGlobal();
+            assertEquals(WorldLifecycleCoordinator.CreateStatus.CREATED, first.join().status());
+            assertEquals(1, gateway.unmanagedLoadCalls);
+        } finally {
+            executor.shutdown(Duration.ofSeconds(1));
+        }
+    }
+
+    @Test
+    void regeneratesDuplicateLegacyIdentityOnlyWhenExplicitlyRequested() throws Exception {
+        final PluginIoExecutor executor = new PluginIoExecutor("LifecycleTest");
+        try {
+            final UUID previousUuid = UUID.fromString("11111111-1111-1111-1111-111111111111");
+            final UUID regeneratedUuid = UUID.fromString("22222222-2222-2222-2222-222222222222");
+            final Path legacy = Files.createDirectories(temporaryDirectory.resolve("archive"));
+            Files.writeString(legacy.resolve("level.dat"), "world");
+            writeLegacyUuid(legacy.resolve("uid.dat"), previousUuid);
+            final WorldManagementService metadata = new WorldManagementService(
+                executor, new InMemoryWorldMetadataRepository(), new WorldRegistry()
+            );
+            metadata.load().join();
+            final FakeGateway gateway = new FakeGateway();
+            gateway.uuidOwners.put(previousUuid, new WorldRuntimeGateway.LifecycleWorld(
+                identity("existing", previousUuid),
+                io.github.bearl.worldmanagement.world.LifecycleCapability.MANAGED
+            ));
+            gateway.nextNameLoadIdentity = identity("archive", regeneratedUuid);
+            final WorldLifecycleCoordinator service = service(
+                gateway, metadata, executor, Optional.empty(), temporaryDirectory
+            );
+
+            final WorldLifecycleCoordinator.CreateResult result = service.importWorld(
+                "archive", WorldRuntimeGateway.WorldEnvironment.NORMAL, false, true, null
+            ).join();
+
+            assertEquals(WorldLifecycleCoordinator.CreateStatus.CREATED, result.status());
+            assertEquals(regeneratedUuid, metadata.managedWorld("archive").orElseThrow().identity().worldUuid());
+            assertFalse(Files.exists(legacy.resolve("uid.dat")));
+            assertFalse(Files.exists(legacy.resolve("uid.dat.worldmanagement-recovery")));
+        } finally {
+            executor.shutdown(Duration.ofSeconds(1));
+        }
+    }
+
+    @Test
+    void restoresLegacyIdentityWhenRegenerationLoadFailsBeforeSideEffects() throws Exception {
+        final PluginIoExecutor executor = new PluginIoExecutor("LifecycleTest");
+        try {
+            final UUID previousUuid = UUID.fromString("11111111-1111-1111-1111-111111111111");
+            final Path legacy = Files.createDirectories(temporaryDirectory.resolve("archive"));
+            Files.writeString(legacy.resolve("level.dat"), "world");
+            writeLegacyUuid(legacy.resolve("uid.dat"), previousUuid);
+            final WorldManagementService metadata = new WorldManagementService(
+                executor, new InMemoryWorldMetadataRepository(), new WorldRegistry()
+            );
+            metadata.load().join();
+            final FakeGateway gateway = new FakeGateway();
+            gateway.loadSucceeds = false;
+            final WorldLifecycleCoordinator service = service(
+                gateway, metadata, executor, Optional.empty(), temporaryDirectory
+            );
+
+            final WorldLifecycleCoordinator.CreateResult result = service.importWorld(
+                "archive", WorldRuntimeGateway.WorldEnvironment.NORMAL, false, true, null
+            ).join();
+
+            assertEquals(WorldLifecycleCoordinator.CreateStatus.FAILED, result.status());
+            assertEquals(previousUuid, readLegacyUuid(legacy.resolve("uid.dat")));
+            assertFalse(Files.exists(legacy.resolve("uid.dat.worldmanagement-recovery")));
+            assertTrue(metadata.metadataWorld("archive").isEmpty());
+        } finally {
+            executor.shutdown(Duration.ofSeconds(1));
+        }
+    }
+
+    @Test
+    void preservesRecoveryMarkerWhenRegenerationFailsAfterRuntimeLoad() throws Exception {
+        final PluginIoExecutor executor = new PluginIoExecutor("LifecycleTest");
+        try {
+            final UUID previousUuid = UUID.fromString("11111111-1111-1111-1111-111111111111");
+            final UUID regeneratedUuid = UUID.fromString("22222222-2222-2222-2222-222222222222");
+            final Path legacy = Files.createDirectories(temporaryDirectory.resolve("archive"));
+            Files.writeString(legacy.resolve("level.dat"), "world");
+            writeLegacyUuid(legacy.resolve("uid.dat"), previousUuid);
+            final WorldManagementService metadata = new WorldManagementService(
+                executor, new FailingCreateMetadataRepository(), new WorldRegistry()
+            );
+            metadata.load().join();
+            final FakeGateway gateway = new FakeGateway();
+            gateway.nextNameLoadIdentity = identity("archive", regeneratedUuid);
+            final WorldLifecycleCoordinator service = service(
+                gateway, metadata, executor, Optional.empty(), temporaryDirectory
+            );
+
+            final WorldLifecycleCoordinator.CreateResult result = service.importWorld(
+                "archive", WorldRuntimeGateway.WorldEnvironment.NORMAL, false, true, null
+            ).join();
+
+            assertEquals(
+                WorldLifecycleCoordinator.CreateStatus.IDENTITY_REGENERATION_INCOMPLETE,
+                result.status()
+            );
+            assertFalse(gateway.loaded.contains("archive"));
+            assertFalse(Files.exists(legacy.resolve("uid.dat")));
+            assertTrue(Files.exists(legacy.resolve("uid.dat.worldmanagement-recovery")));
+            assertTrue(metadata.metadataWorld("archive").isEmpty());
+        } finally {
+            executor.shutdown(Duration.ofSeconds(1));
+        }
+    }
+
+    @Test
+    void reportsIncompleteWhenRuntimeKeepsPreviousIdentityAfterRegeneration() throws Exception {
+        final PluginIoExecutor executor = new PluginIoExecutor("LifecycleTest");
+        try {
+            final UUID previousUuid = UUID.fromString("11111111-1111-1111-1111-111111111111");
+            final Path legacy = Files.createDirectories(temporaryDirectory.resolve("archive"));
+            Files.writeString(legacy.resolve("level.dat"), "world");
+            writeLegacyUuid(legacy.resolve("uid.dat"), previousUuid);
+            final WorldManagementService metadata = new WorldManagementService(
+                executor, new InMemoryWorldMetadataRepository(), new WorldRegistry()
+            );
+            metadata.load().join();
+            final FakeGateway gateway = new FakeGateway();
+            gateway.nextNameLoadIdentity = identity("archive", previousUuid);
+            final WorldLifecycleCoordinator service = service(
+                gateway, metadata, executor, Optional.empty(), temporaryDirectory
+            );
+
+            final WorldLifecycleCoordinator.CreateResult result = service.importWorld(
+                "archive", WorldRuntimeGateway.WorldEnvironment.NORMAL, false, true, null
+            ).join();
+
+            assertEquals(
+                WorldLifecycleCoordinator.CreateStatus.IDENTITY_REGENERATION_INCOMPLETE,
+                result.status()
+            );
+            assertFalse(gateway.loaded.contains("archive"));
+            assertFalse(Files.exists(legacy.resolve("uid.dat")));
+            assertTrue(Files.exists(legacy.resolve("uid.dat.worldmanagement-recovery")));
+            assertTrue(metadata.metadataWorld("archive").isEmpty());
+        } finally {
+            executor.shutdown(Duration.ofSeconds(1));
+        }
+    }
+
+    @Test
     void importsUnknownStorageAsDetachedLifecycleMetadata() throws Exception {
         final PluginIoExecutor executor = new PluginIoExecutor("LifecycleTest");
         try {
@@ -2515,6 +2762,7 @@ final class WorldLifecycleCoordinatorTest {
         private boolean pendingOperationsCancelled;
         private Path createdWorldDirectory;
         private int runtimeAccesses;
+        private int unmanagedLoadCalls;
         private int saveCalls;
         private Boolean lastUnloadSave;
         private io.github.bearl.worldmanagement.world.WorldIdentitySnapshot nextClaimLoadIdentity;
@@ -2534,6 +2782,7 @@ final class WorldLifecycleCoordinatorTest {
             runtimeIdentities = new java.util.HashMap<>();
         private final java.util.Map<String, io.github.bearl.worldmanagement.world.LifecycleCapability>
             runtimeCapabilities = new java.util.HashMap<>();
+        private final java.util.Map<UUID, LifecycleWorld> uuidOwners = new java.util.HashMap<>();
         private io.github.bearl.worldmanagement.world.VerifiedWorldRef lastIdentityUnload;
         private java.util.function.BooleanSupplier runtimeAccessAllowed = () -> true;
 
@@ -2580,6 +2829,7 @@ final class WorldLifecycleCoordinatorTest {
         @Override
         public LoadResult loadUnmanaged(final String worldName, final WorldEnvironment environment) {
             recordRuntimeAccess();
+            unmanagedLoadCalls++;
             lastUnmanagedLoadEnvironment = environment;
             if (!loadSucceeds) {
                 return LoadResult.failed();
@@ -2701,6 +2951,12 @@ final class WorldLifecycleCoordinatorTest {
                 replacementAfterLoadedLookupIdentity = null;
             }
             return Optional.of(result);
+        }
+
+        @Override
+        public Optional<LifecycleWorld> findLoadedWorldByUuid(final UUID worldUuid) {
+            recordRuntimeAccess();
+            return Optional.ofNullable(uuidOwners.get(worldUuid));
         }
 
         @Override
@@ -3119,8 +3375,40 @@ final class WorldLifecycleCoordinatorTest {
         Files.createDirectories(data.resolve("minecraft"));
         Files.createDirectories(data.resolve("paper"));
         Files.writeString(data.resolve("minecraft").resolve("world_gen_settings.dat"), "worldgen");
-        Files.writeString(data.resolve("paper").resolve("metadata.dat"), "metadata");
+        final UUID worldUuid = UUID.nameUUIDFromBytes(
+            ("paper-fixture:" + worldId).getBytes(java.nio.charset.StandardCharsets.UTF_8)
+        );
+        final int[] encodedUuid = {
+            (int) (worldUuid.getMostSignificantBits() >> 32),
+            (int) worldUuid.getMostSignificantBits(),
+            (int) (worldUuid.getLeastSignificantBits() >> 32),
+            (int) worldUuid.getLeastSignificantBits()
+        };
+        final net.kyori.adventure.nbt.CompoundBinaryTag root =
+            net.kyori.adventure.nbt.CompoundBinaryTag.builder()
+                .put("data", net.kyori.adventure.nbt.CompoundBinaryTag.builder()
+                    .putIntArray("uuid", encodedUuid)
+                    .build())
+                .build();
+        net.kyori.adventure.nbt.BinaryTagIO.writer().write(
+            root,
+            data.resolve("paper").resolve("metadata.dat"),
+            net.kyori.adventure.nbt.BinaryTagIO.Compression.GZIP
+        );
         Files.writeString(data.resolve("paper").resolve("level_overrides.dat"), "overrides");
+    }
+
+    private static void writeLegacyUuid(final Path path, final UUID worldUuid) throws Exception {
+        try (final java.io.DataOutputStream output = new java.io.DataOutputStream(Files.newOutputStream(path))) {
+            output.writeLong(worldUuid.getMostSignificantBits());
+            output.writeLong(worldUuid.getLeastSignificantBits());
+        }
+    }
+
+    private static UUID readLegacyUuid(final Path path) throws Exception {
+        try (final java.io.DataInputStream input = new java.io.DataInputStream(Files.newInputStream(path))) {
+            return new UUID(input.readLong(), input.readLong());
+        }
     }
 
     private static final class ImmediateDispatcher implements WorldThreadDispatcher {

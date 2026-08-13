@@ -350,25 +350,15 @@ public final class WorldManagementCommand {
         }
         final String actor = actorOf(sender);
         final CommandMessageSender.Target responseTarget = messageSender.capture(sender);
-        lifecycleService.validateImportable(worldName).whenComplete((valid, validationFailure) -> {
-            if (validationFailure != null) {
-                respond(responseTarget, "command.load.validation-failure", "world", worldName);
-                return;
-            }
-            if (!valid) {
-                respond(responseTarget, "command.load.not-importable", "world", worldName);
-                return;
-            }
-            threadDispatcher.executeGlobal(() -> lifecycleService.importWorld(
-                worldName, environment, true, auditEvent(actor, "world.load.detached", worldName, "")
-            ).whenComplete((result, failure) -> respond(
-                responseTarget,
-                failure == null
-                    ? createResultKey("command.load", true, result.status())
-                    : "command.load.backend-failure",
-                "world", worldName
-            )));
-        });
+        threadDispatcher.executeGlobal(() -> lifecycleService.importWorld(
+            worldName, environment, true, auditEvent(actor, "world.load.detached", worldName, "")
+        ).whenComplete((result, failure) -> respond(
+            responseTarget,
+            failure == null
+                ? createResultKey("command.load", true, result.status())
+                : "command.load.backend-failure",
+            "world", worldName
+        )));
         return true;
     }
 
@@ -545,48 +535,52 @@ public final class WorldManagementCommand {
     }
 
     private boolean importWorld(final CommandSender sender, final String[] arguments) {
-        final String actor = actorOf(sender);
-        if (!sender.hasPermission(IMPORT_PERMISSION)) {
-            send(sender, "command.permission.import");
-            return true;
-        }
         if (arguments.length != 3 && (arguments.length != 4 || !arguments[3].equals("--detached"))) {
             send(sender, "command.import.usage");
             return true;
         }
-        final boolean detached = arguments.length == 4;
-        final String worldName = validWorldName(sender, arguments[1]);
+        return executeImport(
+            sender,
+            arguments[1],
+            arguments[2],
+            new ImportCommandOptions(arguments.length == 4, false)
+        );
+    }
+
+    boolean executeImport(
+        final CommandSender sender,
+        final String suppliedWorldName,
+        final String suppliedEnvironment,
+        final ImportCommandOptions options
+    ) {
+        if (!sender.hasPermission(IMPORT_PERMISSION)) {
+            send(sender, "command.permission.import");
+            return true;
+        }
+        Objects.requireNonNull(options, "options");
+        final String actor = actorOf(sender);
+        final String worldName = validWorldName(sender, suppliedWorldName);
         if (worldName == null) {
             return true;
         }
         final WorldRuntimeGateway.WorldEnvironment environment;
         try {
-            environment = WorldRuntimeGateway.WorldEnvironment.valueOf(arguments[2].toUpperCase(Locale.ROOT));
+            environment = WorldRuntimeGateway.WorldEnvironment.valueOf(suppliedEnvironment.toUpperCase(Locale.ROOT));
         } catch (final IllegalArgumentException exception) {
             send(sender, "command.import.usage");
             return true;
         }
         final CommandMessageSender.Target responseTarget = messageSender.capture(sender);
-        lifecycleService.validateImportable(worldName).whenComplete((valid, validationFailure) -> {
-            if (validationFailure != null) {
-                respond(responseTarget, "command.import.validation-failure", "world", worldName);
-                return;
-            }
-            if (!valid) {
-                respond(responseTarget, "command.import.not-importable");
-                return;
-            }
-            final AuditEvent event = auditEvent(actor, "world.import", worldName, "");
-            threadDispatcher.executeGlobal(() -> lifecycleService.importWorld(
-                worldName, environment, detached, event
-            ).whenComplete((result, failure) -> respond(
-                responseTarget,
-                failure == null
-                    ? createResultKey("command.import", detached, result.status())
-                    : "command.import.backend-failure",
-                "world", worldName
-            )));
-        });
+        final AuditEvent event = auditEvent(actor, "world.import", worldName, "");
+        threadDispatcher.executeGlobal(() -> lifecycleService.importWorld(
+            worldName, environment, options.detached(), options.regenerateIdentity(), event
+        ).whenComplete((result, failure) -> respond(
+            responseTarget,
+            failure == null
+                ? createResultKey("command.import", options.detached(), result.status())
+                : "command.import.backend-failure",
+            "world", worldName
+        )));
         return true;
     }
 
@@ -947,6 +941,9 @@ public final class WorldManagementCommand {
             case CREATED -> keyPrefix + (detached ? ".success-detached" : ".success");
             case ALREADY_EXISTS -> keyPrefix + ".already-exists";
             case FAILED -> keyPrefix + ".failure";
+            case STORAGE_CONFLICT -> keyPrefix + ".storage-conflict";
+            case DUPLICATE_IDENTITY -> keyPrefix + ".duplicate-identity";
+            case IDENTITY_REGENERATION_INCOMPLETE -> keyPrefix + ".identity-regeneration-incomplete";
             case NOT_READY -> "command.loading";
             case OPERATION_IN_PROGRESS -> keyPrefix + ".operation-in-progress";
         };

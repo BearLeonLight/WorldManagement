@@ -361,7 +361,7 @@ async function runConsoleMatrix (paper, logPath, serverRoot) {
   await command(paper, logPath, 'wm remove imported purge confirm', '已永久清除已停止管理世界 imported', 'wm remove <world> purge confirm')
   await command(
     paper, logPath, 'wm import imported NORMAL --detached',
-    '世界 imported 已匯入，中繼資料已保存但不套用治理', 'wm import <world> <environment> --detached'
+    '世界 imported 已匯入，中繼資料已保存但不套用治理', 'wm import <world> <environment> <options>'
   )
   assert.equal(readMetadata(serverRoot, 'imported')['management-state'], 'DETACHED')
   await command(paper, logPath, 'wm unload imported', '世界 imported 已卸載', 'wm unload <world>', false)

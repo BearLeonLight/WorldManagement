@@ -43,13 +43,7 @@ final class WorldManagementCommandSpec {
             lifecycle("unload", List.of(optionalFallbackTree("unload"))),
             lifecycle("remove", List.of(removeTree())),
             lifecycle("manage", List.of(words("manage", route("manage"), List.of("world"), List.of(detachedWorlds())))),
-            lifecycle("import", List.of(argument("import.world", "world", CommandArgumentKind.WORD, List.of(
-                argument("import.environment", "environment", CommandArgumentKind.WORD, List.of(
-                    literal("import.detached", "--detached", inherit(), List.of())
-                        .executes(new CommandRoute(List.of("import"), List.of("--detached")), List.of("world", "environment"))
-                )).suggests(staticSuggestions(ENVIRONMENTS))
-                    .executes(route("import"), List.of("world", "environment"))
-            )))),
+            lifecycle("import", importTree()),
             lifecycle("delete", List.of(deleteTree())),
             identityTree(),
             displayNameTree(),
@@ -124,6 +118,25 @@ final class WorldManagementCommandSpec {
         final CommandNodeSpec environment = argument("create.environment", "environment", CommandArgumentKind.WORD, List.of(worldType))
             .suggests(staticSuggestions(ENVIRONMENTS));
         return List.of(argument("create.world", "world", CommandArgumentKind.WORD, List.of(environment)));
+    }
+
+    private List<CommandNodeSpec> importTree() {
+        final CommandNodeSpec options = CommandNodeSpec.typedArgument(
+            "import.options",
+            "options",
+            new ImportCommandOptionsArgument(),
+            "[--detached] [--regenerate-identity]",
+            List.of()
+        ).executesTyped(route("import"), List.of(
+            new CommandArgumentBinding("world", String.class),
+            new CommandArgumentBinding("environment", String.class),
+            new CommandArgumentBinding("options", ImportCommandOptions.class)
+        ));
+        final CommandNodeSpec environment = argument(
+            "import.environment", "environment", CommandArgumentKind.WORD, List.of(options)
+        ).suggests(staticSuggestions(ENVIRONMENTS))
+            .executes(route("import"), List.of("world", "environment"));
+        return List.of(argument("import.world", "world", CommandArgumentKind.WORD, List.of(environment)));
     }
 
     private CommandNodeSpec deleteTree() {

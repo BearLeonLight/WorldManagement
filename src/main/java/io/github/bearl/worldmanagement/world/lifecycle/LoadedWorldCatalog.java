@@ -6,12 +6,15 @@ import java.util.LinkedHashMap;
 import java.util.Map;
 import java.util.Objects;
 import java.util.Optional;
+import java.util.UUID;
 import java.util.concurrent.atomic.AtomicReference;
 
 /** Atomically published loaded-world identities captured from Paper events. */
 public final class LoadedWorldCatalog {
 
-    private final AtomicReference<State> state = new AtomicReference<>(new State(Map.of(), Map.of(), Map.of(), 0L));
+    private final AtomicReference<State> state = new AtomicReference<>(
+        new State(Map.of(), Map.of(), Map.of(), Map.of(), 0L)
+    );
 
     public void replaceAll(final Collection<WorldRuntimeGateway.LifecycleWorld> worlds) {
         final Map<VerifiedWorldRef, WorldRuntimeGateway.LifecycleWorld> replacement = new LinkedHashMap<>();
@@ -55,6 +58,12 @@ public final class LoadedWorldCatalog {
             .filter(runtime -> runtime.reference().equals(requiredWorld));
     }
 
+    public Optional<WorldRuntimeGateway.LifecycleWorld> findUniqueByWorldUuid(final UUID worldUuid) {
+        return Optional.ofNullable(state.get().uniqueWorldsByUuid().get(
+            Objects.requireNonNull(worldUuid, "worldUuid")
+        ));
+    }
+
     public java.util.List<String> uniqueWorldIds() {
         return state.get().uniqueWorldsById().keySet().stream()
             .sorted()
@@ -94,7 +103,8 @@ public final class LoadedWorldCatalog {
             final Map<String, Long> generations = new LinkedHashMap<>(current.generations());
             generations.remove(requiredObservation.worldId());
             return new State(
-                current.worlds(), current.uniqueWorldsById(), Map.copyOf(generations), current.generationSequence()
+                current.worlds(), current.uniqueWorldsById(), current.uniqueWorldsByUuid(),
+                Map.copyOf(generations), current.generationSequence()
             );
         });
     }
@@ -114,7 +124,10 @@ public final class LoadedWorldCatalog {
             generations.put(worldId, generation);
             observation.set(new Observation(worldId, generation));
             final Map<VerifiedWorldRef, WorldRuntimeGateway.LifecycleWorld> worlds = mutation.apply(current);
-            return new State(worlds, uniqueWorldsById(worlds), Map.copyOf(generations), generation);
+            return new State(
+                worlds, uniqueWorldsById(worlds), uniqueWorldsByUuid(worlds),
+                Map.copyOf(generations), generation
+            );
         });
         return observation.get();
     }
@@ -133,7 +146,8 @@ public final class LoadedWorldCatalog {
         }
         final Map<VerifiedWorldRef, WorldRuntimeGateway.LifecycleWorld> immutableWorlds = Map.copyOf(worlds);
         return new State(
-            immutableWorlds, uniqueWorldsById(immutableWorlds), Map.copyOf(generations), generation
+            immutableWorlds, uniqueWorldsById(immutableWorlds), uniqueWorldsByUuid(immutableWorlds),
+            Map.copyOf(generations), generation
         );
     }
 
@@ -154,6 +168,24 @@ public final class LoadedWorldCatalog {
         return Map.copyOf(unique);
     }
 
+    private static Map<UUID, WorldRuntimeGateway.LifecycleWorld> uniqueWorldsByUuid(
+        final Map<VerifiedWorldRef, WorldRuntimeGateway.LifecycleWorld> worlds
+    ) {
+        final Map<UUID, WorldRuntimeGateway.LifecycleWorld> unique = new LinkedHashMap<>();
+        final java.util.Set<UUID> ambiguous = new java.util.HashSet<>();
+        for (final WorldRuntimeGateway.LifecycleWorld world : worlds.values()) {
+            final UUID worldUuid = world.identity().worldUuid();
+            if (ambiguous.contains(worldUuid)) {
+                continue;
+            }
+            if (unique.putIfAbsent(worldUuid, world) != null) {
+                unique.remove(worldUuid);
+                ambiguous.add(worldUuid);
+            }
+        }
+        return Map.copyOf(unique);
+    }
+
     public record Observation(String worldId, long generation) {
         public Observation {
             Objects.requireNonNull(worldId, "worldId");
@@ -163,6 +195,7 @@ public final class LoadedWorldCatalog {
     private record State(
         Map<VerifiedWorldRef, WorldRuntimeGateway.LifecycleWorld> worlds,
         Map<String, WorldRuntimeGateway.LifecycleWorld> uniqueWorldsById,
+        Map<UUID, WorldRuntimeGateway.LifecycleWorld> uniqueWorldsByUuid,
         Map<String, Long> generations,
         long generationSequence
     ) {

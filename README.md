@@ -103,10 +103,11 @@ create flags可任意排序且不得重複。completion逐token提供尚未使�
 /wm import archive NORMAL
 /wm adopt events-staged --detached
 /wm import archive-staged NORMAL --detached
+/wm import archive-copy NORMAL --regenerate-identity
 /wm load archive-cold NORMAL --detached
 ```
 
-`--detached`只登錄 metadata 與 lifecycle 工具，不啟用 Warp、Ownership 或 Protection 治理；DETACHED仍可使用world tp與display-name。若要讓目前受管世界停止治理，但保留 loaded runtime、玩家、metadata、設定與地圖，使用 `/wm remove <world>`；之後可用 `/wm manage <world>` 重新啟用。只有 `purge confirm` 會移除 DETACHED metadata，只有 `delete ... confirm` 會刪除地圖資料。
+`--detached`只登錄 metadata 與 lifecycle 工具，不啟用 Warp、Ownership 或 Protection 治理；DETACHED仍可使用world tp與display-name。import遇到已由另一個載入世界使用的持久化UUID時會先拒絕；只有確認目錄是世界複本後才使用`--regenerate-identity`。同名legacy與Paper新路徑同時存在時永遠拒絕，不自動選擇來源。若要讓目前受管世界停止治理，但保留 loaded runtime、玩家、metadata、設定與地圖，使用 `/wm remove <world>`；之後可用 `/wm manage <world>` 重新啟用。只有 `purge confirm` 會移除 DETACHED metadata，只有 `delete ... confirm` 會刪除地圖資料。
 
 站在目標世界建立公開Warp，讓玩家使用；私有Warp可用`trust`加入目前線上玩家名稱或UUID：
 

@@ -13,7 +13,7 @@ CONSOLE_RUNTIME wm remove <world>
 CONSOLE_RUNTIME wm remove <world> purge confirm
 CONSOLE_RUNTIME wm manage <world>
 CONSOLE_RUNTIME wm import <world> <environment>
-CONSOLE_RUNTIME wm import <world> <environment> --detached
+CONSOLE_RUNTIME wm import <world> <environment> <options>
 CONSOLE_RUNTIME wm delete <world> confirm
 PLAYER_RUNTIME wm delete <world> <fallback> confirm
 CONSOLE_RUNTIME wm identity show <world>
