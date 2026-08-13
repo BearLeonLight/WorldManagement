@@ -136,7 +136,8 @@ public final class PaperWorldStorageGateway implements WorldStorageGateway {
             throw new StorageException("Could not begin world identity regeneration.", exception);
         }
         return new PaperIdentityRegenerationClaim(
-            gatewayId, previousWorldUuid, identityMarker, recoveryMarker
+            gatewayId, claim.worldId(), claim.fingerprint().paperLayout(), previousWorldUuid,
+            identityMarker, recoveryMarker
         );
     }
 
@@ -155,8 +156,27 @@ public final class PaperWorldStorageGateway implements WorldStorageGateway {
     }
 
     @Override
-    public void finalizeIdentityRegeneration(final IdentityRegenerationClaim regenerationClaim) {
+    public void finalizeIdentityRegeneration(
+        final IdentityRegenerationClaim regenerationClaim,
+        final UUID regeneratedWorldUuid
+    ) {
         final PaperIdentityRegenerationClaim claim = requireIdentityRegenerationClaim(regenerationClaim);
+        final UUID expectedUuid = Objects.requireNonNull(regeneratedWorldUuid, "regeneratedWorldUuid");
+        if (claim.previousWorldUuid().equals(expectedUuid)) {
+            throw new StorageException("Regenerated world identity still uses the previous UUID.");
+        }
+        final Path paperIdentityMarker = dimensionDirectory(claim.worldId())
+            .resolve("data").resolve("paper").resolve("metadata.dat");
+        if (!readPaperWorldUuid(paperIdentityMarker).equals(expectedUuid)) {
+            throw new StorageException("Persisted Paper world UUID does not match the regenerated runtime identity.");
+        }
+        if (Files.notExists(claim.recoveryMarker(), LinkOption.NOFOLLOW_LINKS)) {
+            if (!claim.paperLayout()
+                && Files.notExists(legacyDirectory(claim.worldId()), LinkOption.NOFOLLOW_LINKS)) {
+                return;
+            }
+            throw new StorageException("World identity recovery marker disappeared before finalization.");
+        }
         requireRegularIdentityMarker(claim.recoveryMarker());
         try {
             Files.delete(claim.recoveryMarker());
@@ -835,6 +855,8 @@ public final class PaperWorldStorageGateway implements WorldStorageGateway {
 
     private record PaperIdentityRegenerationClaim(
         UUID gatewayId,
+        String worldId,
+        boolean paperLayout,
         UUID previousWorldUuid,
         Path identityMarker,
         Path recoveryMarker

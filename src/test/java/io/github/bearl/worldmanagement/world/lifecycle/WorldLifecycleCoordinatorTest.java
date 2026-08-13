@@ -1277,6 +1277,18 @@ final class WorldLifecycleCoordinatorTest {
                 io.github.bearl.worldmanagement.world.LifecycleCapability.MANAGED
             ));
             gateway.nextNameLoadIdentity = identity("archive", regeneratedUuid);
+            gateway.unmanagedLoadSideEffect = () -> {
+                try {
+                    createPaperStorage(temporaryDirectory, "archive", regeneratedUuid);
+                    try (final var paths = Files.walk(legacy)) {
+                        for (final Path path : paths.sorted(java.util.Comparator.reverseOrder()).toList()) {
+                            Files.delete(path);
+                        }
+                    }
+                } catch (final java.io.IOException exception) {
+                    throw new java.io.UncheckedIOException(exception);
+                }
+            };
             final WorldLifecycleCoordinator service = service(
                 gateway, metadata, executor, Optional.empty(), temporaryDirectory
             );
@@ -2771,6 +2783,7 @@ final class WorldLifecycleCoordinatorTest {
         private io.github.bearl.worldmanagement.world.WorldIdentitySnapshot nextLookupIdentity;
         private io.github.bearl.worldmanagement.world.WorldIdentitySnapshot replacementAfterLoadedLookupIdentity;
         private io.github.bearl.worldmanagement.world.WorldIdentitySnapshot replacementAfterNameLoadIdentity;
+        private Runnable unmanagedLoadSideEffect = () -> { };
         private WorldCreationRequest lastCreateRequest;
         private WorldEnvironment lastUnmanagedLoadEnvironment;
         private WorldEnvironment lastManagedLoadEnvironment;
@@ -2838,6 +2851,7 @@ final class WorldLifecycleCoordinatorTest {
             if (loadFailure != null) {
                 throw loadFailure;
             }
+            unmanagedLoadSideEffect.run();
             final LifecycleWorld loadedWorld = loadReturnsNullAfterLoading
                 ? null
                 : lifecycleWorld(worldName, nextNameLoadIdentity);
@@ -3369,15 +3383,26 @@ final class WorldLifecycleCoordinatorTest {
     }
 
     private static void createPaperStorage(final Path levelDirectory, final String worldId) throws Exception {
+        createPaperStorage(
+            levelDirectory,
+            worldId,
+            UUID.nameUUIDFromBytes(
+                ("paper-fixture:" + worldId).getBytes(java.nio.charset.StandardCharsets.UTF_8)
+            )
+        );
+    }
+
+    private static void createPaperStorage(
+        final Path levelDirectory,
+        final String worldId,
+        final UUID worldUuid
+    ) throws java.io.IOException {
         final Path data = Files.createDirectories(
             levelDirectory.resolve("dimensions").resolve("minecraft").resolve(worldId).resolve("data")
         );
         Files.createDirectories(data.resolve("minecraft"));
         Files.createDirectories(data.resolve("paper"));
         Files.writeString(data.resolve("minecraft").resolve("world_gen_settings.dat"), "worldgen");
-        final UUID worldUuid = UUID.nameUUIDFromBytes(
-            ("paper-fixture:" + worldId).getBytes(java.nio.charset.StandardCharsets.UTF_8)
-        );
         final int[] encodedUuid = {
             (int) (worldUuid.getMostSignificantBits() >> 32),
             (int) worldUuid.getMostSignificantBits(),

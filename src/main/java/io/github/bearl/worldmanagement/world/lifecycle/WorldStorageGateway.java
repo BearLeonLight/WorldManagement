@@ -34,7 +34,10 @@ public interface WorldStorageGateway {
         throw new UnsupportedOperationException("Identity regeneration is unavailable.");
     }
 
-    default void finalizeIdentityRegeneration(final IdentityRegenerationClaim regenerationClaim) {
+    default void finalizeIdentityRegeneration(
+        final IdentityRegenerationClaim regenerationClaim,
+        final java.util.UUID regeneratedWorldUuid
+    ) {
         throw new UnsupportedOperationException("Identity regeneration is unavailable.");
     }
 

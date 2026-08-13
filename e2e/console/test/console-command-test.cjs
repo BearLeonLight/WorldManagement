@@ -378,6 +378,28 @@ async function runConsoleMatrix (paper, logPath, serverRoot) {
     '世界 imported 已匯入並加入管理', 'wm import <world> <environment>'
   )
   assert.equal(readMetadata(serverRoot, 'imported')['management-state'], 'ACTIVE')
+  const importedUuid = readMetadata(serverRoot, 'imported').identity.accepted['world-uuid']
+  const importedDimension = path.join(serverRoot, 'world', 'dimensions', 'minecraft', 'imported')
+  const importCopyLegacy = path.join(serverRoot, 'importcopy')
+  fs.mkdirSync(importCopyLegacy)
+  fs.copyFileSync(path.join(serverRoot, 'world', 'level.dat'), path.join(importCopyLegacy, 'level.dat'))
+  fs.cpSync(path.join(importedDimension, 'region'), path.join(importCopyLegacy, 'region'), { recursive: true })
+  writeLegacyUuid(path.join(importCopyLegacy, 'uid.dat'), importedUuid)
+  await command(
+    paper, logPath, 'wm import importcopy NORMAL --regenerate-identity',
+    '世界 importcopy 已匯入並加入管理', 'wm import <world> <environment> <options>', false
+  )
+  const importCopyMetadata = readMetadata(serverRoot, 'importcopy')
+  assert.notEqual(
+    importCopyMetadata.identity.accepted['world-uuid'], importedUuid,
+    'Regenerated imported copy must receive a different world UUID.'
+  )
+  assert.equal(fs.existsSync(importCopyLegacy), false, 'Paper must remove the migrated legacy source.')
+  assert.equal(
+    fs.existsSync(path.join(importCopyLegacy, 'uid.dat.worldmanagement-recovery')),
+    false,
+    'A completed legacy migration must not leave a recovery marker.'
+  )
 
   await command(paper, logPath, 'wm ownership owner remove overworld', '世界擁有者已更新', 'wm ownership owner remove <world>')
   await command(paper, logPath, 'wm ownership rank create overworld builder', '世界階級設定已更新', 'wm ownership rank create <world> <rank>')
@@ -576,6 +598,12 @@ function readMetadata (serverRoot, worldId) {
   const metadata = YAML.parse(fs.readFileSync(metadataFile, 'utf8'))
   assert.equal(metadata['schema-version'], 1, `${worldId} must use schema 1 metadata.`)
   return metadata
+}
+
+function writeLegacyUuid (target, uuid) {
+  const hexadecimal = uuid.replaceAll('-', '')
+  if (!/^[0-9a-fA-F]{32}$/.test(hexadecimal)) throw new Error(`Invalid UUID: ${uuid}`)
+  fs.writeFileSync(target, Buffer.from(hexadecimal, 'hex'))
 }
 
 function assertIdentity (metadata, { state, uuid, seed, structures, pending }) {

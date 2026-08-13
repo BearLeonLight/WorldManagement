@@ -140,6 +140,7 @@ final class PaperWorldStorageGatewayTest {
 
     @Test
     void finalizesIdentityRegenerationWithoutRestoringOldUuid() throws Exception {
+        final UUID regeneratedUuid = UUID.fromString("22222222-2222-2222-2222-222222222222");
         final Path legacy = Files.createDirectories(temporaryDirectory.resolve("archive"));
         Files.writeString(legacy.resolve("level.dat"), "world");
         writeLegacyUuid(
@@ -150,11 +151,109 @@ final class PaperWorldStorageGatewayTest {
         final WorldStorageGateway.IdentityRegenerationClaim regeneration = gateway.beginIdentityRegeneration(
             gateway.prepareImportPreparation("archive").claim().orElseThrow()
         );
+        final Path dimension = createPaperStorage(
+            temporaryDirectory.resolve("dimensions").resolve("minecraft").resolve("archive")
+        );
+        writePaperMetadata(
+            dimension.resolve("data").resolve("paper").resolve("metadata.dat"), regeneratedUuid
+        );
 
-        gateway.finalizeIdentityRegeneration(regeneration);
+        gateway.finalizeIdentityRegeneration(regeneration, regeneratedUuid);
 
         assertFalse(Files.exists(legacy.resolve("uid.dat")));
         assertFalse(Files.exists(regeneration.recoveryPath()));
+    }
+
+    @Test
+    void finalizesLegacyIdentityAfterPaperMigratesAndDeletesSourceDirectory() throws Exception {
+        final UUID regeneratedUuid = UUID.fromString("22222222-2222-2222-2222-222222222222");
+        final Path legacy = Files.createDirectories(temporaryDirectory.resolve("archive"));
+        Files.writeString(legacy.resolve("level.dat"), "world");
+        writeLegacyUuid(
+            legacy.resolve("uid.dat"),
+            UUID.fromString("11111111-1111-1111-1111-111111111111")
+        );
+        final PaperWorldStorageGateway gateway = gateway();
+        final WorldStorageGateway.IdentityRegenerationClaim regeneration = gateway.beginIdentityRegeneration(
+            gateway.prepareImportPreparation("archive").claim().orElseThrow()
+        );
+        final Path dimension = createPaperStorage(
+            temporaryDirectory.resolve("dimensions").resolve("minecraft").resolve("archive")
+        );
+        writePaperMetadata(
+            dimension.resolve("data").resolve("paper").resolve("metadata.dat"),
+            regeneratedUuid
+        );
+        try (final var paths = Files.walk(legacy)) {
+            for (final Path path : paths.sorted(java.util.Comparator.reverseOrder()).toList()) {
+                Files.delete(path);
+            }
+        }
+
+        gateway.finalizeIdentityRegeneration(regeneration, regeneratedUuid);
+
+        assertFalse(Files.exists(regeneration.recoveryPath()));
+        assertEquals(
+            Optional.of(regeneratedUuid),
+            gateway.prepareImportPreparation("archive").claim().orElseThrow().persistedWorldUuid()
+        );
+    }
+
+    @Test
+    void rejectsFinalizationWhenPaperMetadataDoesNotMatchRuntimeUuid() throws Exception {
+        final Path legacy = Files.createDirectories(temporaryDirectory.resolve("archive"));
+        Files.writeString(legacy.resolve("level.dat"), "world");
+        writeLegacyUuid(
+            legacy.resolve("uid.dat"),
+            UUID.fromString("11111111-1111-1111-1111-111111111111")
+        );
+        final PaperWorldStorageGateway gateway = gateway();
+        final WorldStorageGateway.IdentityRegenerationClaim regeneration = gateway.beginIdentityRegeneration(
+            gateway.prepareImportPreparation("archive").claim().orElseThrow()
+        );
+        final Path dimension = createPaperStorage(
+            temporaryDirectory.resolve("dimensions").resolve("minecraft").resolve("archive")
+        );
+        writePaperMetadata(
+            dimension.resolve("data").resolve("paper").resolve("metadata.dat"),
+            UUID.fromString("22222222-2222-2222-2222-222222222222")
+        );
+
+        assertThrows(
+            io.github.bearl.worldmanagement.storage.StorageException.class,
+            () -> gateway.finalizeIdentityRegeneration(
+                regeneration, UUID.fromString("33333333-3333-3333-3333-333333333333")
+            )
+        );
+
+        assertTrue(Files.isRegularFile(regeneration.recoveryPath()));
+    }
+
+    @Test
+    void rejectsMissingRecoveryMarkerWhileLegacySourceStillExists() throws Exception {
+        final UUID regeneratedUuid = UUID.fromString("22222222-2222-2222-2222-222222222222");
+        final Path legacy = Files.createDirectories(temporaryDirectory.resolve("archive"));
+        Files.writeString(legacy.resolve("level.dat"), "world");
+        writeLegacyUuid(
+            legacy.resolve("uid.dat"),
+            UUID.fromString("11111111-1111-1111-1111-111111111111")
+        );
+        final PaperWorldStorageGateway gateway = gateway();
+        final WorldStorageGateway.IdentityRegenerationClaim regeneration = gateway.beginIdentityRegeneration(
+            gateway.prepareImportPreparation("archive").claim().orElseThrow()
+        );
+        Files.delete(regeneration.recoveryPath());
+        final Path dimension = createPaperStorage(
+            temporaryDirectory.resolve("dimensions").resolve("minecraft").resolve("archive")
+        );
+        writePaperMetadata(
+            dimension.resolve("data").resolve("paper").resolve("metadata.dat"), regeneratedUuid
+        );
+
+        assertThrows(
+            io.github.bearl.worldmanagement.storage.StorageException.class,
+            () -> gateway.finalizeIdentityRegeneration(regeneration, regeneratedUuid)
+        );
     }
 
     @Test

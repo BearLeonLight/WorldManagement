@@ -700,7 +700,7 @@ public final class WorldLifecycleCoordinator {
                                         }
                                         return regeneration.isPresent()
                                             ? ioExecutor.execute(() -> storageGateway.finalizeIdentityRegeneration(
-                                                regeneration.orElseThrow()
+                                                regeneration.orElseThrow(), world.identity().worldUuid()
                                             )).thenApply(unused -> CreateResult.created())
                                             : CompletableFuture.completedFuture(CreateResult.created());
                                     });
