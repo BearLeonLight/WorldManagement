@@ -34,4 +34,14 @@ final class StorageConfigurationTest {
     void requiresJdbcUrlForSqlProviders() {
         assertThrows(IllegalArgumentException.class, () -> new StorageConfiguration(StorageProvider.SQLITE, "", "", ""));
     }
+
+    @Test
+    void validatesYamlBackupRetention() {
+        assertThrows(IllegalArgumentException.class, () -> new StorageConfiguration(
+            StorageProvider.YAML, "", "", "", 0
+        ));
+        assertThrows(IllegalArgumentException.class, () -> new StorageConfiguration(
+            StorageProvider.YAML, "", "", "", 1_001
+        ));
+    }
 }

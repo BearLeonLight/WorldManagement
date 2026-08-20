@@ -67,4 +67,25 @@ final class JsonlAuditLogTest {
             assertTrue(files.anyMatch(path -> path.getFileName().toString().startsWith("audit-1970-01-01-")));
         }
     }
+
+    @Test
+    void retainsOnlyTheNewestConfiguredAuditArchives() throws Exception {
+        final JsonlAuditLog auditLog = new JsonlAuditLog(temporaryDirectory, 1, 2);
+        final Path unmanagedFile = temporaryDirectory.resolve("audit-manual.jsonl");
+        Files.writeString(unmanagedFile, "preserve me");
+        for (int index = 0; index < 5; index++) {
+            auditLog.append(new AuditEvent(
+                Instant.EPOCH.plusSeconds(index), Optional.of("Alex"), "warp.set", "creative", "event-" + index
+            ));
+        }
+
+        assertTrue(Files.isRegularFile(temporaryDirectory.resolve("audit.jsonl")));
+        assertEquals("preserve me", Files.readString(unmanagedFile));
+        try (var files = Files.list(temporaryDirectory)) {
+            assertEquals(2, files.filter(path -> {
+                final String name = path.getFileName().toString();
+                return name.startsWith("audit-1970-01-01-") && name.endsWith(".jsonl");
+            }).count());
+        }
+    }
 }

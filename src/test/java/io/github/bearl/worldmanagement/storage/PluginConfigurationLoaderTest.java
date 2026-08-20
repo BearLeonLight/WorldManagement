@@ -23,6 +23,9 @@ final class PluginConfigurationLoaderTest {
         final io.github.bearl.worldmanagement.config.PluginConfiguration configuration = new PluginConfigurationLoader().load(temporaryDirectory);
 
         assertEquals(StorageProvider.YAML, configuration.storage().provider());
+        assertEquals(20, configuration.storage().yamlRetainedBackupsPerWorld());
+        assertEquals(10, configuration.auditFile().maximumFileSizeMib());
+        assertEquals(10, configuration.auditFile().retainedFiles());
         assertEquals(1_000, configuration.deletionDelay().toMillis());
         assertTrue(Files.isRegularFile(temporaryDirectory.resolve("config.yml")));
         assertTrue(Files.isRegularFile(temporaryDirectory.resolve("modules.yml")));
@@ -170,4 +173,44 @@ final class PluginConfigurationLoaderTest {
                 Files.writeString(temporaryDirectory.resolve("config.yml"), "schema-version: 1\nstorage:\n  provider: YAML\ndebug:\n  areas: [unknown]\n");
                 assertThrows(IllegalArgumentException.class, () -> new PluginConfigurationLoader().load(temporaryDirectory));
         }
+
+    @Test
+    void loadsAndValidatesStorageRetentionSettings() throws IOException {
+        Files.writeString(temporaryDirectory.resolve("config.yml"), """
+            schema-version: 1
+            storage:
+              provider: YAML
+              yaml:
+                retained-backups-per-world: 7
+            audit:
+              file:
+                max-file-size-mib: 25
+                retained-files: 12
+            """);
+
+        final var configuration = new PluginConfigurationLoader().load(temporaryDirectory);
+
+        assertEquals(7, configuration.storage().yamlRetainedBackupsPerWorld());
+        assertEquals(25, configuration.auditFile().maximumFileSizeMib());
+        assertEquals(12, configuration.auditFile().retainedFiles());
+
+        Files.writeString(temporaryDirectory.resolve("config.yml"), """
+            schema-version: 1
+            storage:
+              provider: YAML
+              yaml:
+                retained-backups-per-world: 0
+            """);
+        assertThrows(IllegalArgumentException.class, () -> new PluginConfigurationLoader().load(temporaryDirectory));
+
+        Files.writeString(temporaryDirectory.resolve("config.yml"), """
+            schema-version: 1
+            storage:
+              provider: YAML
+            audit:
+              file:
+                retained-files: 0
+            """);
+        assertThrows(IllegalArgumentException.class, () -> new PluginConfigurationLoader().load(temporaryDirectory));
+    }
 }

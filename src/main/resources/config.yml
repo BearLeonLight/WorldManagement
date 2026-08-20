@@ -4,6 +4,8 @@ storage:
   jdbc-url: ""
   username: ""
   password: ""
+  yaml:
+    retained-backups-per-world: 20
 lifecycle:
   fallback-world: ""
   deletion-delay-milliseconds: 1000
@@ -14,6 +16,9 @@ warp:
   enabled: true
 audit:
   policy: BEST_EFFORT
+  file:
+    max-file-size-mib: 10
+    retained-files: 10
 debug:
   level: OFF
   sinks:

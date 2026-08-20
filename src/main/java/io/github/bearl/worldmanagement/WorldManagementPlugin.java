@@ -161,7 +161,7 @@ public final class WorldManagementPlugin extends JavaPlugin {
                 throw new IllegalArgumentException("Missing bundled locale resource: messages_" + locale + ".yml");
             }
             final WorldMetadataRepository repository = StorageRepositoryFactory.create(
-                configuration.storage(), getDataFolder().toPath()
+                configuration.storage(), getDataFolder().toPath(), getLogger()::warning
             );
             AuditStore auditStore = null;
             try {
@@ -734,7 +734,12 @@ public final class WorldManagementPlugin extends JavaPlugin {
 
     private AuditStore createAuditStore(final PluginConfiguration configuration) {
         if (configuration.storage().provider() == io.github.bearl.worldmanagement.storage.StorageProvider.YAML) {
-            return new JsonlAuditLog(getDataFolder().toPath());
+            return new JsonlAuditLog(
+                getDataFolder().toPath(),
+                configuration.auditFile().maximumFileSizeBytes(),
+                configuration.auditFile().retainedFiles(),
+                getLogger()::warning
+            );
         }
         return new SqlAuditStore(
             configuration.storage().jdbcUrl(),

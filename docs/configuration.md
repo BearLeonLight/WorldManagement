@@ -54,6 +54,8 @@ storage:
   jdbc-url: ""
   username: ""
   password: ""
+  yaml:
+    retained-backups-per-world: 20
 lifecycle:
   fallback-world: ""
   deletion-delay-milliseconds: 1000
@@ -64,6 +66,9 @@ warp:
   enabled: true
 audit:
   policy: BEST_EFFORT
+  file:
+    max-file-size-mib: 10
+    retained-files: 10
 debug:
   level: OFF
   sinks:
@@ -107,7 +112,7 @@ storage-migration:
 
 預設診斷允許 world、UUID、canonical action、已解析參數與整數座標。`include-player-names`、`include-masked-ip-addresses`、`include-masked-jdbc-endpoints` 是預設關閉的額外欄位開關。IP 只允許遮罩 network prefix；JDBC endpoint 只允許 scheme、host、port 與 database，移除 userinfo、query 與 fragment。遮罩解析失敗時完全省略原值。密碼、token、raw command、chat、完整 JDBC URL 與完整 metadata payload 永遠不得輸出。
 
-支援的 provider 為 `YAML`、`SQLITE`、`MYSQL`、`MARIADB`。SQL provider 必須設定 JDBC URL；未知 provider 或空 URL 會使 plugin 啟動失敗，不會退回 YAML 或同時寫入多個 storage。每個 YAML 受管世界都保存於：
+支援的 provider 為 `YAML`、`SQLITE`、`MYSQL`、`MARIADB`。成品JAR分別內含SQLite JDBC、MySQL Connector/J與MariaDB Connector/J，且`check`會驗證三個driver都存在於合併後的JDBC service descriptor。SQL provider 必須設定對應driver接受的 JDBC URL；未知 provider 或空 URL 會使 plugin 啟動失敗，不會退回 YAML 或同時寫入多個 storage。每個 YAML 受管世界都保存於：
 
 ```text
 plugins/WorldManagement/worlds/<world>.yml
@@ -178,7 +183,7 @@ SQLite 已由測試驗證。MySQL/MariaDB 使用相同 JDBC adapter，需在目�
   -Dworldmanagement.jdbc.password="..."
 ```
 
-未提供 `worldmanagement.jdbc.url` 時，這個 integration test 會跳過。audit 預設以 `BEST_EFFORT` 寫入 `plugins/WorldManagement/audit.jsonl`；可設定 `OFF`、`BEST_EFFORT` 或 `STRICT`。delete、remove（含detached metadata purge）、owner transfer與storage migration在effective policy為`STRICT`時，admission audit必須成功持久化後操作才會開始。點號分層action會繼承最近的parent override，例如`world.remove.purge`會繼承`world.remove`。
+未提供 `worldmanagement.jdbc.url` 時，這個 integration test 會跳過。audit 預設以 `BEST_EFFORT` 寫入 `plugins/WorldManagement/audit.jsonl`；可設定 `OFF`、`BEST_EFFORT` 或 `STRICT`。`audit.file.max-file-size-mib`限制目前JSONL檔案大小（`1-100`），`audit.file.retained-files`保留最新的輪替archive（`1-100`）；預設每10 MiB輪替並保留10份。archive清理失敗只記錄warning，不會拒絕目前audit append。delete、remove（含detached metadata purge）、owner transfer與storage migration在effective policy為`STRICT`時，admission audit必須成功持久化後操作才會開始。點號分層action會繼承最近的parent override，例如`world.remove.purge`會繼承`world.remove`。
 
 `ownership.maximum-custom-ranks` 會限制每個世界可建立的自訂 rank 數；系統 `OWNER` 與 `GUEST` 不計入限制。`warp.enabled: false` 會停用 `/wm warp`，既有 metadata 不會被刪除。
 
@@ -279,4 +284,4 @@ PlaceholderAPI只輸出純文字，因此顯示名稱中的MiniMessage格式不�
 
 玩家與 RCON 直接接收 Adventure Component，由 Paper 負責能力降級。本機控制台的啟動摘要與指令回覆固定序列化為 ANSI 16 色，支援 Windows Terminal、PowerShell 及其他 ANSI 終端；Paper 的 rolling log appender 會移除 ANSI escape，`logs/latest.log` 仍保持純文字。`ProxiedCommandSender` 的回覆依 Paper 的 caller audience 轉送；最終 caller 是玩家時使用該玩家的 entity scheduler，否則使用 global scheduler。循環 proxy 不會遞迴發送。
 
-YAML overwrite/delete 前會建立 `plugins/WorldManagement/worlds/backup/` 備份。單一 YAML 檔無法解析時會移至 `worlds/quarantine/`，其餘完整 metadata 仍可載入。
+YAML overwrite/delete 前會建立 `plugins/WorldManagement/worlds/backup/` 備份。`storage.yaml.retained-backups-per-world`限制每個world保留的最新備份數（`1-1000`，預設20）；清理失敗只記錄warning，不會讓已提交的metadata mutation與記憶體快取失去一致性。這些mutation snapshots不包含地圖資料，不能取代外部world backup。單一 YAML 檔無法解析時會移至 `worlds/quarantine/`，其餘完整 metadata 仍可載入。

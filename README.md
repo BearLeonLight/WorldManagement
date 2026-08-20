@@ -15,6 +15,15 @@ WorldManagement 是面向 Paper 伺服器的世界管理插件，目標是提供
 
 ## 建置與測試
 
+Linux 或 macOS：
+
+```bash
+./gradlew check
+./gradlew build
+```
+
+Windows：
+
 ```powershell
 .\gradlew.bat check
 .\gradlew.bat build
@@ -67,11 +76,11 @@ WorldManagement 是面向 Paper 伺服器的世界管理插件，目標是提供
 .\gradlew.bat paperPlayerE2eTest
 ```
 
-Paper JAR 選擇參數與 `paperJarSmokeTest` 相同。Via fallback 預設動態使用目前 Mineflayer `testedVersions` 的最新版，也可用 `-PmineflayerMinecraftVersion=<version>` 只覆寫 fallback client；原生模式永遠使用 status ping 對應版本。必要的 `paperJarSmokeTest` 固定使用隔離 SQLite provider，console matrix 與玩家 E2E 使用 YAML provider；三者都會要求 terminal repository/audit/diagnostic close 的成功 marker，並將 classloader、I/O drain、shutdown timeout warning或Paper watchdog stall視為失敗。player suite的world fixtures使用固定seed、停用structures與forced spawn，避免把vanilla隨機spawn搜尋延遲混入指令契約，並由Paper console的dimension與事件探針驗證實際registry world key、傳送、respawn及保護結果，不只比較Mineflayer快取或localized聊天文字。replacement respawn案例會以一次性的`PlayerRespawnEvent`測試目的地明確進入CONFLICT world，再確認production post-respawn relocation回到安全fallback；不依賴replacement UUID後可能失效的vanilla個人spawnpoint。console log 保留在 `build/console-command-test/latest.log`；player attempt logs 分別保留在 `build/player-e2e/native/latest.log` 與 `build/player-e2e/via-fallback/latest.log`，成功 attempt 另複製為 `build/player-e2e/latest.log`。Via與LuckPerms artifacts都快取於Gradle user home；console與原生協定判斷不會取得Via artifacts。
+Paper JAR 選擇參數與 `paperJarSmokeTest` 相同。Via fallback 預設動態使用目前 Mineflayer `testedVersions` 的最新版，也可用 `-PmineflayerMinecraftVersion=<version>` 只覆寫 fallback client；原生模式永遠使用 status ping 對應版本。必要的 `paperJarSmokeTest` 固定使用隔離 SQLite provider，console matrix 與玩家 E2E 使用 YAML provider；三者都會要求 terminal repository/audit/diagnostic close 的成功 marker，並將 classloader、I/O drain、shutdown timeout warning或Paper watchdog stall視為失敗。console與player suites的world fixtures使用固定seed、停用structures與forced spawn，避免把vanilla隨機spawn搜尋延遲混入指令契約，並由Paper console的dimension與事件探針驗證實際registry world key、傳送、respawn及保護結果，不只比較Mineflayer快取或localized聊天文字。replacement respawn案例會以一次性的`PlayerRespawnEvent`測試目的地明確進入CONFLICT world，再確認production post-respawn relocation回到安全fallback；不依賴replacement UUID後可能失效的vanilla個人spawnpoint。console log 保留在 `build/console-command-test/latest.log`；player attempt logs 分別保留在 `build/player-e2e/native/latest.log` 與 `build/player-e2e/via-fallback/latest.log`，成功 attempt 另複製為 `build/player-e2e/latest.log`。Via與LuckPerms artifacts都快取於Gradle user home；console與原生協定判斷不會取得Via artifacts。
 
 `e2e/command-runtime-coverage.txt` 將每個 Brigadier executable path 分類為 `CONSOLE_RUNTIME` 或 `PLAYER_RUNTIME`。JUnit 會把這份宣告與實際 command tree 做完整集合比對；新增 leaf 卻未分類、重複 path 或未知層級都會讓 `check` 失敗。兩個 runtime runner 也會分別驗證自己實際執行的 canonical leaf IDs，並在發送前比對 command literal skeleton、argument arity 與 aliases；不能以訊息 assertion 數量代替 leaf coverage。runtime task 會先執行純 Node harness tests，確認 leaf mapping 與 build child 目錄 guard，避免錯誤環境變數刪除 build 外路徑。
 
-可部署的 shaded JAR 位於 `build/libs/WorldManagement-1.0.0.jar`，已內含 BoostedYAML、SQLite 與 MySQL JDBC driver，並 relocate BoostedYAML/SnakeYAML。將該 JAR 放入 Paper 伺服器的 `plugins/` 目錄，重新啟動伺服器。
+可部署的 shaded JAR 位於 `build/libs/WorldManagement-1.0.0.jar`，已內含 BoostedYAML、SQLite、MySQL 與 MariaDB JDBC driver，並 relocate BoostedYAML/SnakeYAML。`check`會直接檢查成品JAR的JDBC service descriptor，避免driver class已封裝但無法由`DriverManager`發現。將該 JAR 放入 Paper 伺服器的 `plugins/` 目錄，重新啟動伺服器。
 
 ## 基本操作範例
 
@@ -219,7 +228,7 @@ WorldManagement 在 `INFO` 層級輸出精簡的啟動階段摘要：設定與 s
 - 同一世界 lifecycle state gate、fallback world 驗證與 entity-affine 非同步玩家傳送
 - metadata-first desired state、啟動/外部載入 bounded reconciliation、顯式存檔後卸載、unknown loaded runtime unload/delete、已載入世界的兩階段 delete confirm、nonblocking delete delay、transaction-bound `DELETING` tombstone、atomic quarantine/restore、同runtime permanent delete、shutdown/crash recovery 與 external reload abort
 - YAML、SQLite、MySQL/MariaDB metadata provider，且永遠只有一個有效 provider；SQL 使用 HikariCP
-- YAML atomic write、備份、毀損隔離；JSONL rotation 或 SQL audit store
+- YAML atomic write、bounded備份保留、毀損隔離；bounded JSONL rotation 或 SQL audit store
 - SQL metadata mutation 與其成功 audit event 使用同一 JDBC transaction；YAML provider 保持 metadata 原子檔案寫入後的非阻塞 JSONL audit
 - `/wm` 採單一 immutable command specification，經 Paper Brigadier + `PluginBootstrap` 編譯實際 tree；同一 spec 驅動 Help、usage/error、權限/模組可見性、completion、canonical routes與runtime leaf IDs
 - `/wm help [page|command path]` 支援 1-based 分頁與完整巢狀 path；錯誤子指令、缺少或多餘參數會回覆最近可見 usage 與 Help 提示

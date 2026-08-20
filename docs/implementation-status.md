@@ -2,13 +2,13 @@
 
 本文件記錄 WorldManagement `1.0.0` 初版的實際交付狀態，以目前 source、tests、resources 與 runtime smoke test 為準。
 
-最後核對：2026-08-08。
+最後核對：2026-08-20。
 
 ## 已完成
 
-- Java 25 Gradle Kotlin DSL、Shadow JAR、`paper-plugin.yml`、可選 LuckPerms、Multiverse-Core 5、PlaceholderAPI與MiniPlaceholders compile-only dependencies，以及支援 TestServer 自動偵測、Paper Fill v3 下載、SHA-256 驗證與 Gradle cache 的 `paperJarSmokeTest`。WorldManagement 僅支援 Minecraft `26.x`（`1.26.x`）；不符合版本會在啟動初始化前記錄提示並停用插件。
+- Java 25 Gradle Kotlin DSL、可直接於Unix執行的Gradle wrapper、Shadow JAR、`paper-plugin.yml`、可選 LuckPerms、Multiverse-Core 5、PlaceholderAPI與MiniPlaceholders compile-only dependencies，以及支援 TestServer 自動偵測、Paper Fill v3 下載、SHA-256 驗證與 Gradle cache 的 `paperJarSmokeTest`。成品JAR合併JDBC service descriptor，`check`驗證SQLite、MySQL與MariaDB driver皆可被發現。WorldManagement 僅支援 Minecraft `26.x`（`1.26.x`）；不符合版本會在啟動初始化前記錄提示並停用插件。
 - 核心 I/O/threading 邊界：bounded `PluginIoExecutor`、`WorldThreadDispatcher`、event-driven shutdown drain、由有硬上限的受管terminal I/O workers逐項隔離且聚合錯誤的resource close、可觀察的shutdown timeout、拒絕symlink/junction/reparse point的world name/real-path confinement、訊息與設定載入。
-- YAML、SQLite、MySQL/MariaDB 的單一 metadata provider；config、完整 metadata payload 與 JDBC schema 均以 1 為初版，future schema fail-closed，YAML支援atomic write/backup/quarantine，SQL使用Hikari JDBC與optimistic locking。generator、biome provider、deletion transaction與registration source provenance由共用schema 1 payload codec持久化。
+- YAML、SQLite、MySQL/MariaDB 的單一 metadata provider；config、完整 metadata payload 與 JDBC schema 均以 1 為初版，future schema fail-closed，YAML支援atomic write/per-world bounded backup/quarantine，JSONL audit支援bounded archive retention，SQL使用Hikari JDBC與optimistic locking。generator、biome provider、deletion transaction與registration source provenance由共用schema 1 payload codec持久化。
 - 不可變 metadata aggregate 與 `WorldRegistry` 原子 snapshot 替換；成功 persistence/transaction commit 後才更新快取。
 - `world/lifecycle/` 的create/load/unload/remove/manage/import/adopt/delete、unknown loaded runtime unload/delete auto-adopt、`load <world> <environment> --detached`、DETACHED/DELETING/DELETE_AUTO metadata、any-loaded fallback、metadata-first desired state、bounded reconciliation、顯式save後卸載、兩階段delete confirm、transaction-bound tombstone、同runtime permanent delete與shutdown/crash quarantine recovery、create/import compensation、global affinity、per-world operation gate與entity-affine player teleport。
 - `/wm tp self|player|--any` 支援ACTIVE與DETACHED world spawn或座標傳送；ACTIVE套用immutable治理policy，DETACHED只要求verified lifecycle identity與command permission。display-name同樣支援ACTIVE/DETACHED，Warp/Ownership/Protection維持ACTIVE-only。
@@ -20,7 +20,7 @@
 - storage migration與metadata mutation共用gate；成功後凍結mutation等待provider切換，失敗時清除partial target並恢復active provider。
 - `modules.yml`：lifecycle、warp、ownership、protection、storage 的 enablement；Warp 與 ownership command implementation 各自位於對應 feature package。
 - `.github/agents/paper-performance-reviewer.agent.md`、`.github/skills/storage-migration/SKILL.md` 與 `.github/skills/command-verification/SKILL.md` 已存在，分別負責唯讀 concurrency review、安全 migration，以及依契約選擇 JUnit、Paper console runtime 或 Mineflayer player E2E；skills 不複製固定指令清單。
-- `paperConsoleCommandTest`與`paperPlayerE2eTest`分別負責console與真實玩家runtime契約；runtime manifest目前分類33個console leaves與15個player leaves，包含load detached與list all leaf。console runner以真實Multiverse-Core 5.7.3驗證remove/delete解除追蹤、同runtime terminal cleanup及重啟持久性。JUnit tree traversal會拒絕未分類、重複或未知層級的executable path，runner以server-side metadata、filesystem、event與dimension final state驗證結果。
+- `paperConsoleCommandTest`與`paperPlayerE2eTest`分別負責console與真實玩家runtime契約；runtime manifest目前分類33個console leaves與15個player leaves，包含load detached與list all leaf。兩套runner的world fixtures固定seed、停用structures並指定forced spawn；console runner以真實Multiverse-Core 5.7.3驗證remove/delete解除追蹤、同runtime terminal cleanup及重啟持久性。JUnit tree traversal會拒絕未分類、重複或未知層級的executable path，runner以server-side metadata、filesystem、event與dimension final state驗證結果。
 
 ## 部分完成或待補強
 

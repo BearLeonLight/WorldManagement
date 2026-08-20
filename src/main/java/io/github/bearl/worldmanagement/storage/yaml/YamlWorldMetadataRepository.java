@@ -12,12 +12,15 @@ import java.nio.file.AtomicMoveNotSupportedException;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.StandardCopyOption;
+import java.nio.file.attribute.FileTime;
 import java.time.Instant;
 import java.util.ArrayList;
 import java.util.Collection;
 import java.util.Comparator;
 import java.util.List;
 import java.util.Optional;
+import java.util.Objects;
+import java.util.function.Consumer;
 import java.util.stream.Stream;
 
 /** Stores each world aggregate in one independently recoverable YAML file. */
@@ -26,10 +29,29 @@ public final class YamlWorldMetadataRepository implements WorldMetadataRepositor
     private final Path worldsDirectory;
     private final YamlWorldMetadataCodec codec;
     private final WorldNameValidator worldNameValidator = new WorldNameValidator();
+    private final int retainedBackupsPerWorld;
+    private final Consumer<String> warningSink;
 
     public YamlWorldMetadataRepository(final Path worldsDirectory) {
+        this(
+            worldsDirectory,
+            io.github.bearl.worldmanagement.storage.StorageConfiguration.DEFAULT_YAML_RETAINED_BACKUPS_PER_WORLD,
+            ignored -> { }
+        );
+    }
+
+    public YamlWorldMetadataRepository(
+        final Path worldsDirectory,
+        final int retainedBackupsPerWorld,
+        final Consumer<String> warningSink
+    ) {
         this.worldsDirectory = worldsDirectory.toAbsolutePath().normalize();
         this.codec = new YamlWorldMetadataCodec();
+        if (retainedBackupsPerWorld < 1 || retainedBackupsPerWorld > 1_000) {
+            throw new IllegalArgumentException("retainedBackupsPerWorld must be between 1 and 1000.");
+        }
+        this.retainedBackupsPerWorld = retainedBackupsPerWorld;
+        this.warningSink = Objects.requireNonNull(warningSink, "warningSink");
     }
 
     @Override
@@ -163,7 +185,41 @@ public final class YamlWorldMetadataRepository implements WorldMetadataRepositor
     private void backup(final Path metadataFile) throws IOException {
         final Path backupDirectory = worldsDirectory.resolve("backup");
         Files.createDirectories(backupDirectory);
-        Files.copy(metadataFile, backupDirectory.resolve(metadataFile.getFileName().toString() + "." + Instant.now().toEpochMilli() + ".bak"));
+        Files.copy(metadataFile, backupDirectory.resolve(
+            metadataFile.getFileName().toString() + "." + Instant.now().toEpochMilli()
+                + "-" + System.nanoTime() + ".bak"
+        ));
+        pruneBackups(backupDirectory, metadataFile.getFileName().toString());
+    }
+
+    private void pruneBackups(final Path backupDirectory, final String metadataFileName) {
+        try (Stream<Path> files = Files.list(backupDirectory)) {
+            final String prefix = metadataFileName + ".";
+            final List<RetainedFile> backups = new ArrayList<>();
+            for (final Path file : files.toList()) {
+                final String fileName = file.getFileName().toString();
+                if (fileName.startsWith(prefix) && fileName.endsWith(".bak")
+                    && Files.isRegularFile(file, java.nio.file.LinkOption.NOFOLLOW_LINKS)) {
+                    backups.add(new RetainedFile(file, Files.getLastModifiedTime(file)));
+                }
+            }
+            backups.sort(Comparator.comparing(RetainedFile::modified)
+                .thenComparing(retained -> retained.path().getFileName().toString())
+                .reversed());
+            for (int index = retainedBackupsPerWorld; index < backups.size(); index++) {
+                Files.deleteIfExists(backups.get(index).path());
+            }
+        } catch (final IOException | RuntimeException exception) {
+            warnRetentionFailure("Could not enforce YAML metadata backup retention: " + exception.getMessage());
+        }
+    }
+
+    private void warnRetentionFailure(final String message) {
+        try {
+            warningSink.accept(message);
+        } catch (final RuntimeException ignored) {
+            // Retention cleanup is best-effort and must not invalidate a committed metadata mutation.
+        }
     }
 
     private void quarantine(final Path metadataFile) {
@@ -177,5 +233,8 @@ public final class YamlWorldMetadataRepository implements WorldMetadataRepositor
     }
 
     private record MetadataDocument(Path file, String serialized) {
+    }
+
+    private record RetainedFile(Path path, FileTime modified) {
     }
 }
