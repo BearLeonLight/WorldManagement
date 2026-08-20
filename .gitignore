@@ -1,5 +1,7 @@
 .gradle/
 build/
+.vscode/
+gradle/
 bin/
 out/
 *.iml
