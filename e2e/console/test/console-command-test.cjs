@@ -317,7 +317,11 @@ async function runConsoleMatrix (paper, logPath, serverRoot) {
     '已永久清除已停止管理世界 adoptdetached', 'wm remove <world> purge confirm', false
   )
 
-  await feedback(paper, logPath, 'mv create basic NORMAL', "World 'basic' created!")
+  await feedback(
+    paper, logPath,
+    'mv create basic NORMAL --seed 2001 --no-structures --force-spawn-position 0,80,0',
+    "World 'basic' created!"
+  )
   assertMultiverseTracked(serverRoot, 'basic')
   await command(paper, logPath, 'wm adopt basic', '世界 basic 已加入管理', 'wm adopt <world>')
   const basicStoragePaths = [
@@ -329,9 +333,14 @@ async function runConsoleMatrix (paper, logPath, serverRoot) {
   )) {
     throw new Error('Paper did not create on-disk storage for basic world.')
   }
-  await command(paper, logPath, 'wm create typeonly NORMAL FLAT', '世界 typeonly 已建立並加入管理', 'wm create <world> <environment> <world-type>')
   await command(
-    paper, logPath, 'wm create createddetached NORMAL FLAT --detached',
+    paper, logPath, 'wm create basic NORMAL FLAT',
+    '世界 basic 已有執行中實例或中繼資料，未重複建立',
+    'wm create <world> <environment> <world-type>'
+  )
+  await command(
+    paper, logPath,
+    'wm create createddetached NORMAL FLAT --seed 2004 --no-structures --force-spawn-position 0,80,0 --detached',
     '世界 createddetached 已建立，中繼資料已保存但不套用', 'wm create <world> <environment> <world-type> <options>', false
   )
   assert.equal(readMetadata(serverRoot, 'createddetached')['management-state'], 'DETACHED')
@@ -353,7 +362,12 @@ async function runConsoleMatrix (paper, logPath, serverRoot) {
     'wm load <world> <environment> --detached'
   )
   assert.equal(readMetadata(serverRoot, 'runtimeonly')['management-state'], 'DETACHED')
-  await command(paper, logPath, 'wm create imported NORMAL FLAT --seed 12345', '世界 imported 已建立並加入管理', 'wm create <world> <environment> <world-type> <options>')
+  await command(
+    paper, logPath,
+    'wm create imported NORMAL FLAT --seed 12345 --no-structures --force-spawn-position 0,80,0',
+    '世界 imported 已建立並加入管理',
+    'wm create <world> <environment> <world-type> <options>'
+  )
   await command(paper, logPath, 'wm unload imported', '世界 imported 已卸載', 'wm unload <world>')
   await command(paper, logPath, 'wm load imported', '世界 imported 已載入', 'wm load <world>')
   await command(paper, logPath, 'wm unload imported', '世界 imported 已卸載', 'wm unload <world>')
@@ -379,11 +393,14 @@ async function runConsoleMatrix (paper, logPath, serverRoot) {
   )
   assert.equal(readMetadata(serverRoot, 'imported')['management-state'], 'ACTIVE')
   const importedUuid = readMetadata(serverRoot, 'imported').identity.accepted['world-uuid']
-  const importedDimension = path.join(serverRoot, 'world', 'dimensions', 'minecraft', 'imported')
   const importCopyLegacy = path.join(serverRoot, 'importcopy')
   fs.mkdirSync(importCopyLegacy)
   fs.copyFileSync(path.join(serverRoot, 'world', 'level.dat'), path.join(importCopyLegacy, 'level.dat'))
-  fs.cpSync(path.join(importedDimension, 'region'), path.join(importCopyLegacy, 'region'), { recursive: true })
+  fs.cpSync(
+    path.join(serverRoot, 'world', 'dimensions', 'minecraft', 'overworld', 'region'),
+    path.join(importCopyLegacy, 'region'),
+    { recursive: true }
+  )
   writeLegacyUuid(path.join(importCopyLegacy, 'uid.dat'), importedUuid)
   await command(
     paper, logPath, 'wm import importcopy NORMAL --regenerate-identity',
@@ -410,7 +427,11 @@ async function runConsoleMatrix (paper, logPath, serverRoot) {
   await command(paper, logPath, 'wm ownership access overworld mode WHITELIST', '世界存取設定已更新', 'wm ownership access <world> <operation> <value>', false)
   await command(paper, logPath, 'wm ownership access overworld mode NONE', '世界存取設定已更新', 'wm ownership access <world> <operation> <value>', false)
 
-  await feedback(paper, logPath, 'mv create archive NORMAL', "World 'archive' created!")
+  await feedback(
+    paper, logPath,
+    'mv create archive NORMAL --seed 2002 --no-structures --force-spawn-position 0,80,0',
+    "World 'archive' created!"
+  )
   assertMultiverseTracked(serverRoot, 'archive')
   await command(paper, logPath, 'wm adopt archive', '世界 archive 已加入管理', 'wm adopt <world>')
   await command(paper, logPath, 'wm unload archive', '世界 archive 已卸載', 'wm unload <world>')

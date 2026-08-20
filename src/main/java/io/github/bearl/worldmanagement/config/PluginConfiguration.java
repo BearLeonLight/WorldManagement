@@ -18,6 +18,7 @@ public record PluginConfiguration(
     int maximumCustomRanks,
     boolean warpEnabled,
     AuditPolicy auditPolicy,
+    AuditFileConfiguration auditFile,
     String locale,
     DebugConfiguration debug,
     HookConfiguration hooks,
@@ -36,6 +37,7 @@ public record PluginConfiguration(
             throw new IllegalArgumentException("maximumCustomRanks must not be negative.");
         }
         Objects.requireNonNull(auditPolicy, "auditPolicy");
+        Objects.requireNonNull(auditFile, "auditFile");
         if (locale == null || locale.isBlank()) {
             throw new IllegalArgumentException("locale must not be blank.");
         }

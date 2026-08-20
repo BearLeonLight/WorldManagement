@@ -109,6 +109,35 @@ final class YamlWorldMetadataRepositoryTest {
     }
 
     @Test
+    void retainsOnlyTheNewestConfiguredBackupsForEachWorld() throws Exception {
+        final Path worlds = temporaryDirectory.resolve("worlds");
+        final YamlWorldMetadataRepository repository = new YamlWorldMetadataRepository(worlds, 2, ignored -> { });
+        WorldMetadata metadata = WorldMetadata.createDefault("creative", true);
+        repository.create(metadata);
+
+        for (int index = 0; index < 4; index++) {
+            final AccessMode mode = index % 2 == 0 ? AccessMode.BLACKLIST : AccessMode.NONE;
+            final WorldMetadata updated = metadata.withAccessControl(new AccessControl(mode, Set.of()));
+            repository.replace(updated, metadata.version());
+            metadata = updated;
+        }
+        WorldMetadata survival = WorldMetadata.createDefault("survival", true);
+        repository.create(survival);
+        for (int index = 0; index < 3; index++) {
+            final WorldMetadata updated = survival.withAccessControl(new AccessControl(AccessMode.BLACKLIST, Set.of()));
+            repository.replace(updated, survival.version());
+            survival = updated;
+        }
+
+        assertEquals(metadata, repository.find("creative").orElseThrow());
+        try (var backups = Files.list(worlds.resolve("backup"))) {
+            final var names = backups.map(path -> path.getFileName().toString()).toList();
+            assertEquals(2, names.stream().filter(name -> name.startsWith("creative.yml.")).count());
+            assertEquals(2, names.stream().filter(name -> name.startsWith("survival.yml.")).count());
+        }
+    }
+
+    @Test
     void quarantinesCorruptMetadataWithoutBlockingOtherWorlds() throws Exception {
         final Path worlds = temporaryDirectory.resolve("worlds");
         final YamlWorldMetadataRepository repository = new YamlWorldMetadataRepository(worlds);

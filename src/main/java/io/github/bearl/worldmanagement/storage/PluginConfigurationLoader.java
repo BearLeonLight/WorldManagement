@@ -2,6 +2,7 @@ package io.github.bearl.worldmanagement.storage;
 
 import dev.dejvokep.boostedyaml.YamlDocument;
 import io.github.bearl.worldmanagement.audit.AuditPolicy;
+import io.github.bearl.worldmanagement.config.AuditFileConfiguration;
 import io.github.bearl.worldmanagement.config.HookConfiguration;
 import io.github.bearl.worldmanagement.config.PluginConfiguration;
 import io.github.bearl.worldmanagement.config.DebugArea;
@@ -33,6 +34,8 @@ public final class PluginConfigurationLoader {
                 "  jdbc-url: \"\"",
                 "  username: \"\"",
                 "  password: \"\"",
+                "  yaml:",
+                "    retained-backups-per-world: 20",
                 "lifecycle:",
                 "  fallback-world: \"\"",
                 "  deletion-delay-milliseconds: 1000",
@@ -43,6 +46,9 @@ public final class PluginConfigurationLoader {
                 "  enabled: true",
                 "audit:",
                 "  policy: BEST_EFFORT",
+                "  file:",
+                "    max-file-size-mib: 10",
+                "    retained-files: 10",
                 "debug:",
                 "  level: OFF",
                 "  sinks:",
@@ -110,7 +116,11 @@ public final class PluginConfigurationLoader {
                     StorageProvider.parse(provider),
                     document.getString("storage.jdbc-url", ""),
                     document.getString("storage.username", ""),
-                    document.getString("storage.password", "")
+                    document.getString("storage.password", ""),
+                    document.getInt(
+                        "storage.yaml.retained-backups-per-world",
+                        StorageConfiguration.DEFAULT_YAML_RETAINED_BACKUPS_PER_WORLD
+                    )
                 ),
                 fallbackWorld.isEmpty() ? java.util.Optional.empty() : java.util.Optional.of(fallbackWorld),
                 java.time.Duration.ofMillis(delayMilliseconds),
@@ -118,6 +128,13 @@ public final class PluginConfigurationLoader {
                 maximumCustomRanks,
                 document.getBoolean("warp.enabled", true),
                 AuditPolicy.parse(document.getString("audit.policy", "BEST_EFFORT")),
+                new AuditFileConfiguration(
+                    document.getInt(
+                        "audit.file.max-file-size-mib",
+                        AuditFileConfiguration.DEFAULT_MAXIMUM_FILE_SIZE_MIB
+                    ),
+                    document.getInt("audit.file.retained-files", AuditFileConfiguration.DEFAULT_RETAINED_FILES)
+                ),
                 document.getString("locale", "zh_TW"),
                 loadDebugConfiguration(document),
                 loadHooks(dataDirectory),

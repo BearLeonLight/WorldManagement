@@ -189,6 +189,7 @@ dependencies {
     implementation("dev.dejvokep:boosted-yaml:${providers.gradleProperty("boostedYamlVersion").get()}")
     implementation("org.xerial:sqlite-jdbc:${providers.gradleProperty("sqliteJdbcVersion").get()}")
     implementation("com.mysql:mysql-connector-j:${providers.gradleProperty("mysqlConnectorVersion").get()}")
+    implementation("org.mariadb.jdbc:mariadb-java-client:${providers.gradleProperty("mariaDbConnectorVersion").get()}")
     implementation("com.zaxxer:HikariCP:${providers.gradleProperty("hikariVersion").get()}")
     compileOnly("net.luckperms:api:${providers.gradleProperty("luckPermsApiVersion").get()}")
     testImplementation("net.luckperms:api:${providers.gradleProperty("luckPermsApiVersion").get()}")
@@ -312,13 +313,46 @@ tasks {
     }
 
     named("check") {
-        dependsOn(verifyE2eSupportIsolation)
+        dependsOn(verifyE2eSupportIsolation, "verifyJdbcDriverServices")
     }
 
     shadowJar {
         archiveClassifier = ""
+        filesMatching("META-INF/services/**") {
+            duplicatesStrategy = DuplicatesStrategy.INCLUDE
+        }
+        mergeServiceFiles()
         relocate("dev.dejvokep.boostedyaml", "io.github.bearl.worldmanagement.lib.boostedyaml")
         relocate("org.yaml.snakeyaml", "io.github.bearl.worldmanagement.lib.snakeyaml")
+    }
+
+    register("verifyJdbcDriverServices") {
+        group = "verification"
+        description = "Verifies that the deployable JAR exposes every bundled JDBC driver."
+        dependsOn(shadowJar)
+
+        doLast {
+            val servicePath = "META-INF/services/java.sql.Driver"
+            val serviceFiles = zipTree(shadowJar.get().archiveFile.get().asFile)
+                .matching { include(servicePath) }
+                .files
+            if (serviceFiles.size != 1) {
+                throw GradleException("Production plugin JAR must contain exactly one $servicePath descriptor.")
+            }
+            val drivers = serviceFiles.single().readLines()
+                .map(String::trim)
+                .filter { it.isNotEmpty() && !it.startsWith("#") }
+                .toSet()
+            val expected = setOf(
+                "org.sqlite.JDBC",
+                "com.mysql.cj.jdbc.Driver",
+                "org.mariadb.jdbc.Driver",
+            )
+            val missing = expected - drivers
+            if (missing.isNotEmpty()) {
+                throw GradleException("Production plugin JAR is missing JDBC service providers: ${missing.sorted()}.")
+            }
+        }
     }
 
     build {
